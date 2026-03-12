@@ -1,11 +1,10 @@
 {
   "name": "escrow-bot",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-"scripts": {
-  "start": "node index.js"
-}
+  "description": "Sure Deal Escrow Bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
   },
   "keywords": [],
   "author": "",
