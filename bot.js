@@ -296,4 +296,6 @@ bot.action("MY_DEALS", async (ctx) => {
 
 // ===== Launch Bot =====
 bot.launch();
-console.log("Sure Deal Escrow Bot Running...");
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
