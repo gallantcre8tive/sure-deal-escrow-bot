@@ -1,0 +1,55 @@
+[
+  {
+    "dealId": "DEAL-6d9fefa4",
+    "buyer": 7302270500,
+    "seller": "@gallantcre8tive",
+    "amount": 500,
+    "fee": null,
+    "sellerReceives": null,
+    "currency": "USDT",
+    "status": "waiting_payment"
+  },
+  {
+    "dealId": "DEAL-921629b0",
+    "buyer": 7302270500,
+    "seller": "@gallantcre8tive",
+    "amount": 250,
+    "fee": null,
+    "sellerReceives": null,
+    "currency": "BTC",
+    "status": "waiting_payment"
+  },
+  {
+    "dealId": "DEAL-bad3a6b5",
+    "buyer": 7302270500,
+    "seller": "@gallantcre8tive",
+    "amount": 1,
+    "fee": null,
+    "sellerReceives": null,
+    "currency": "USDT",
+    "status": "pending_seller",
+    "chat": []
+  },
+  {
+    "dealId": "DEAL-f620a907",
+    "buyer": 7302270500,
+    "seller": "@gallantcre8tive",
+    "amount": 2,
+    "fee": null,
+    "sellerReceives": null,
+    "currency": "BTC",
+    "status": "pending_seller",
+    "chat": []
+  },
+  {
+    "dealId": "DEAL-3ad79f2e",
+    "buyer": 7302270500,
+    "seller": "@gallantcre8tive",
+    "amount": 3,
+    "fee": 0.15,
+    "sellerReceives": 2.85,
+    "currency": "USDT",
+    "status": "pending_seller",
+    "chat": []
+  }
+]
