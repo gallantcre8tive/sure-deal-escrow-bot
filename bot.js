@@ -1,27 +1,47 @@
-require("dotenv").config();
-const { Telegraf, Markup } = require("telegraf");
-const fs = require("fs");
-const { getDeals, saveDeals } = require("./utils/storage");
-const wallets = require("./config/wallets");
-const generateDealId = require("./utils/generateDealId");
-const { calculateFee } = require("./services/feeService");
-const { getUserReviews } = require("./services/reviewService");
+// 1️⃣ Load environment variables
+require('dotenv').config();
 
+// 2️⃣ Import modules
+const { Telegraf, Markup } = require('telegraf');
+const fs = require('fs');
+const path = require('path');
+const { getDeals, saveDeals } = require('./utils/storage');
+const wallets = require('./config/wallets');
+const generateDealId = require('./utils/generateDealId');
+const { calculateFee } = require('./services/feeService');
+const { getUserReviews, saveUserReview } = require('./services/reviewService');
+
+// ===== Helper to create file buttons =====
+function fileButtons(deal) {
+  if (!deal.files || deal.files.length === 0) return [];
+  return deal.files.map((f, index) => [
+    Markup.button.callback(
+      `${f.type.toUpperCase()} ${index + 1}`,
+      `FILE_${deal.dealId}_${index}`
+    )
+  ]);
+}
+
+
+// 3️⃣ Create bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const userStates = {}; // Track deal creation or chat states
 
 // ===== Users registration =====
-const usersFile = "./data/users.json";
+const usersFile = './data/users.json';
 let users = {};
-if (fs.existsSync(usersFile)) {
-  users = JSON.parse(fs.readFileSync(usersFile));
-}
-const saveUsers = () =>
-  fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
+if (fs.existsSync(usersFile)) users = JSON.parse(fs.readFileSync(usersFile));
+const saveUsers = () => fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
 
-// ===== Start Command / Main Menu =====
+// ===== User state =====
+const userStates = {};
+const paymentTimers = {};
+
+// ===== Helper: wait function =====
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// ===== START COMMAND / MAIN MENU =====
 bot.start(async (ctx) => {
-  const username = ctx.from.username ? "@" + ctx.from.username : ctx.from.first_name;
+  const username = ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name;
   if (!users[username]) {
     users[username] = ctx.from.id;
     saveUsers();
@@ -31,150 +51,185 @@ bot.start(async (ctx) => {
   await ctx.reply(
     `Welcome to Sure Deal Escrow, ${ctx.from.first_name}!\n\nChoose an option:`,
     Markup.inlineKeyboard([
-      [Markup.button.callback("💼 Create Deal", "CREATE_DEAL")],
-      [Markup.button.callback("📄 My Deals", "MY_DEALS")],
-      [Markup.button.callback("👤 Profile", "PROFILE")],
-      [Markup.button.callback("❓ Help", "HELP")],
+      [Markup.button.callback('💼 Create Deal', 'CREATE_DEAL')],
+      [Markup.button.callback('📄 My Deals', 'MY_DEALS')],
+      [Markup.button.callback('👤 Profile', 'PROFILE')],
+      [Markup.button.callback('❓ Help', 'HELP')]
     ])
   );
 });
 
-// ===== Help =====
-bot.action("HELP", async (ctx) => {
+// ===== HELP BUTTON =====
+bot.action('HELP', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.reply(
     "Sure Deal Escrow Bot Help:\n\n" +
-      "- 💼 Create Deal: Start a new escrow deal\n" +
-      "- 📄 My Deals: View your active deals\n" +
-      "- 👤 Profile: Check your reputation\n" +
-      "- ❓ Help: This menu\n" +
-      "- 💬 Chat: Send messages to the other party within a deal"
+    "- 💼 Create Deal: Start a new escrow deal\n" +
+    "- 📄 My Deals: View your active deals and chat\n" +
+    "- 👤 Profile: See your reviews and completed deals\n" +
+    "- ❓ Help: This menu\n" +
+    "\nIf payment is not confirmed after 30 minutes, submit your Deal ID via this menu to contact support."
   );
 });
 
-// ===== Profile =====
-bot.action("PROFILE", async (ctx) => {
+// ===== PROFILE BUTTON =====
+bot.action('PROFILE', async (ctx) => {
   await ctx.answerCbQuery();
   const userId = ctx.from.id;
   const reviews = getUserReviews(userId);
-  if (reviews.length === 0) return ctx.reply("No reviews yet.");
+  const totalDeals = getDeals().filter(d => d.buyer === userId || users[d.seller] === userId).length;
+
+  if (reviews.length === 0) return ctx.reply(`No reviews yet. Total Deals: ${totalDeals}`);
   const avg = reviews.reduce((a, b) => a + b.rating, 0) / reviews.length;
-  ctx.reply(`👤 Reputation\n\nTotal Reviews: ${reviews.length}\nAverage Rating: ${avg.toFixed(1)} ⭐`);
+  ctx.reply(
+    `👤 Profile\n\n` +
+    `Total Reviews: ${reviews.length}\n` +
+    `Average Rating: ${avg.toFixed(1)} ⭐\n` +
+    `Total Deals: ${totalDeals}`
+  );
 });
 
-// ===== Create Deal =====
-bot.action("CREATE_DEAL", async (ctx) => {
+// ===== CREATE DEAL FLOW =====
+bot.action('CREATE_DEAL', async (ctx) => {
   await ctx.answerCbQuery();
-  userStates[ctx.from.id] = { step: "awaitingSeller", dealData: {} };
+  userStates[ctx.from.id] = { step: 'awaitingSeller', dealData: {} };
   ctx.reply("Enter the seller's username (e.g., @seller):");
 });
 
-// ===== Handle Text Input for Deal & Chat =====
-bot.on("text", async (ctx) => {
+// ===== HANDLE TEXT INPUT =====
+bot.on('text', async (ctx) => {
   const state = userStates[ctx.from.id];
   const msg = ctx.message.text.trim();
+  // ===== FILES HANDLER =====
+bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
+  const deals = getDeals();
+  const activeDeal = deals.find(
+    d => (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id) &&
+         ['waiting_payment', 'paid', 'in_progress'].includes(d.status)
+  );
+  if (!activeDeal) return ctx.reply("No active deal for file upload.");
 
-  // ===== Deal creation steps =====
+  // Save file to deal
+  if (!activeDeal.files) activeDeal.files = [];
+  const fileInfo = ctx.message.document || ctx.message.photo?.[ctx.message.photo.length-1] || ctx.message.video || ctx.message.audio || ctx.message.voice;
+  activeDeal.files.push({
+    from: ctx.from.id,
+    file_id: fileInfo.file_id,
+    type: ctx.updateType,
+    caption: ctx.message.caption || null
+  });
+  saveDeals(deals);
+
+  // Notify the other party
+  const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
+  try {
+    await ctx.telegram.sendMessage(recipientId, `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`);
+  } catch (err) {}
+
+  ctx.reply("✅ File received and forwarded to the other party.");
+});
+
+  // ===== Deal Creation =====
   if (state && state.step) {
     const dealData = state.dealData;
 
-    // Step 1: seller
-    if (state.step === "awaitingSeller") {
+    if (state.step === 'awaitingSeller') {
       dealData.seller = msg;
-      state.step = "awaitingAmountCurrency";
-      return ctx.reply("Enter the deal amount and currency (e.g., 2 BTC, 100 USDT):");
+      state.step = 'awaitingDescription';
+      return ctx.reply("Enter the project description for this deal:");
     }
 
-    // Step 2: amount + currency
-    if (state.step === "awaitingAmountCurrency") {
-      const parts = msg.split(" ");
-      if (parts.length !== 2) return ctx.reply("Enter in format: <amount> <currency> (e.g., 2 BTC)");
+    if (state.step === 'awaitingDescription') {
+      dealData.description = msg;
+      state.step = 'awaitingAmountCurrency';
+      return ctx.reply("Enter the deal amount and currency (e.g., 50 USDT):");
+    }
+
+    if (state.step === 'awaitingAmountCurrency') {
+      const parts = msg.split(' ');
+      if (parts.length !== 2) return ctx.reply("Format: <amount> <currency> (e.g., 50 USDT)");
 
       const amount = Number(parts[0]);
       const currency = parts[1].toUpperCase();
+      if (isNaN(amount) || amount <= 0) return ctx.reply("Invalid amount.");
+      if (!wallets[currency]) return ctx.reply("Currency not supported.");
 
-      if (isNaN(amount) || amount <= 0) return ctx.reply("Invalid amount. Enter a valid number:");
-      if (!wallets[currency]) return ctx.reply("Currency not supported. Try USDT, BTC, ETH, etc.");
-
-      // Calculate fee and seller receives
       const { fee, sellerReceives } = calculateFee(amount);
-
-      // Save deal data temporarily
       dealData.amount = amount;
       dealData.currency = currency;
       dealData.fee = fee;
       dealData.sellerReceives = sellerReceives;
+      state.step = 'confirmDeal';
 
-      state.step = "confirmDeal";
-
-      // Show confirmation message with buttons
       return ctx.reply(
         `✅ Deal Summary:\n\n` +
-          `Seller: ${dealData.seller}\n` +
-          `Amount: ${amount} ${currency}\n` +
-          `Escrow Fee (5%): ${fee} ${currency}\n` +
-          `Seller Receives: ${sellerReceives} ${currency}\n\n` +
-          `Do you want to create this deal?`,
+        `Seller: ${dealData.seller}\n` +
+        `Project: ${dealData.description}\n` +
+        `Amount: ${amount} ${currency}\n` +
+        `Escrow Fee (5%): ${fee} ${currency}\n` +
+        `Seller Receives: ${sellerReceives} ${currency}\n\n` +
+        `Confirm deal?`,
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Confirm Deal", "CONFIRM_DEAL")],
-          [Markup.button.callback("❌ Cancel", "CANCEL_DEAL")]
+          [Markup.button.callback('✅ Confirm Deal', 'CONFIRM_DEAL')],
+          [Markup.button.callback('❌ Cancel', 'CANCEL_DEAL')]
         ])
       );
     }
-
     return;
   }
 
-  // ===== Chat between buyer and seller =====
+  // ===== CHAT FLOW =====
   const deals = getDeals();
   const activeDeal = deals.find(
-    (d) =>
-      (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id) &&
-      ["pending_seller", "waiting_payment", "paid"].includes(d.status)
+    d => (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id) &&
+    ['pending_seller', 'waiting_payment', 'paid', 'in_progress'].includes(d.status)
   );
 
   if (activeDeal) {
     const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
     if (!recipientId) return ctx.reply("The other party has not started the bot yet.");
+
+    if (!activeDeal.chat) activeDeal.chat = [];
     activeDeal.chat.push({ from: ctx.from.id, message: msg });
     saveDeals(deals);
 
     try {
       await ctx.telegram.sendMessage(recipientId, `💬 Message from ${ctx.from.first_name}: ${msg}`);
-      ctx.reply("Message sent to the other party ✅");
+      ctx.reply("Message sent ✅");
     } catch (err) {
-      ctx.reply("Failed to send message. The other party may not have started the bot.");
+      ctx.reply("Failed to send message. Other party may not have started the bot.");
     }
   }
 });
 
-// ===== Confirm / Cancel Deal =====
-bot.action("CONFIRM_DEAL", async (ctx) => {
+// ===== CONFIRM / CANCEL DEAL =====
+bot.action('CONFIRM_DEAL', async (ctx) => {
   await ctx.answerCbQuery();
   const state = userStates[ctx.from.id];
   if (!state || !state.dealData) return ctx.reply("No deal to confirm.");
 
   const dealData = state.dealData;
   const dealId = generateDealId();
-
   const deals = getDeals();
+
   const newDeal = {
     dealId,
     buyer: ctx.from.id,
     seller: dealData.seller,
+    description: dealData.description,
     amount: dealData.amount,
     fee: dealData.fee,
     sellerReceives: dealData.sellerReceives,
     currency: dealData.currency,
-    status: "pending_seller",
+    status: 'pending_seller',
     chat: [],
+    files: []
   };
   deals.push(newDeal);
   saveDeals(deals);
 
   ctx.reply(`✅ Deal Created! Deal ID: ${dealId}\nWaiting for seller to accept.`);
 
-  // Notify seller
   const sellerId = users[dealData.seller];
   if (!sellerId) {
     delete userStates[ctx.from.id];
@@ -184,10 +239,10 @@ bot.action("CONFIRM_DEAL", async (ctx) => {
   try {
     await ctx.telegram.sendMessage(
       sellerId,
-      `📢 New Deal Created!\nBuyer: @${ctx.from.username}\nAmount: ${dealData.amount} ${dealData.currency}\nFee: ${dealData.fee} ${dealData.currency}\nSeller Receives: ${dealData.sellerReceives} ${dealData.currency}\nDeal ID: ${dealId}`,
+      `📢 New Deal Created!\nBuyer: @${ctx.from.username}\nProject: ${dealData.description}\nAmount: ${dealData.amount} ${dealData.currency}\nFee: ${dealData.fee} ${dealData.currency}\nSeller Receives: ${dealData.sellerReceives} ${dealData.currency}\nDeal ID: ${dealId}`,
       Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Accept Deal", `ACCEPT_${dealId}`)],
-        [Markup.button.callback("❌ Reject Deal", `REJECT_${dealId}`)],
+        [Markup.button.callback('✅ Accept Deal', `ACCEPT_${dealId}`)],
+        [Markup.button.callback('❌ Reject Deal', `REJECT_${dealId}`)]
       ])
     );
   } catch (err) {
@@ -197,7 +252,7 @@ bot.action("CONFIRM_DEAL", async (ctx) => {
   delete userStates[ctx.from.id];
 });
 
-bot.action("CANCEL_DEAL", async (ctx) => {
+bot.action('CANCEL_DEAL', async (ctx) => {
   await ctx.answerCbQuery();
   const state = userStates[ctx.from.id];
   if (!state || !state.dealData) return ctx.reply("No deal to cancel.");
@@ -205,97 +260,154 @@ bot.action("CANCEL_DEAL", async (ctx) => {
   ctx.reply("❌ Deal creation canceled.");
 });
 
-// ===== Seller Accept/Reject Deal =====
+// ===== SELLER ACCEPT / REJECT =====
 bot.action(/ACCEPT_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
   const deals = getDeals();
-  const deal = deals.find((d) => d.dealId === dealId);
+  const deal = deals.find(d => d.dealId === dealId);
   if (!deal) return ctx.reply("Deal not found.");
 
-  deal.status = "waiting_payment";
+  deal.status = 'waiting_payment';
   saveDeals(deals);
 
   ctx.answerCbQuery("Deal accepted!");
   ctx.reply("You accepted the deal. Waiting for buyer payment...");
 
   try {
-    await ctx.telegram.sendMessage(deal.buyer, `Seller has accepted your deal! Please send the payment to escrow.`);
+    await ctx.telegram.sendMessage(deal.buyer, `✅ Seller accepted! Send payment to escrow.\nAmount: ${deal.amount} ${deal.currency}\nYou have 30 minutes for payment confirmation.`);
   } catch (err) {}
+
+  // Start 30-min timeout
+  if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
+  paymentTimers[dealId] = setTimeout(async () => {
+    const currentDeals = getDeals();
+    const updatedDeal = currentDeals.find(d => d.dealId === dealId);
+    if (updatedDeal && updatedDeal.status === 'waiting_payment') {
+      await ctx.telegram.sendMessage(deal.buyer, `⚠️ Payment not confirmed within 30 minutes. Contact support via /help and provide your Deal ID: ${dealId}`);
+    }
+  }, 30 * 60 * 1000);
 });
 
+// ===== REJECT DEAL =====
 bot.action(/REJECT_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
   const deals = getDeals();
-  const index = deals.findIndex((d) => d.dealId === dealId);
+  const index = deals.findIndex(d => d.dealId === dealId);
   if (index === -1) return ctx.reply("Deal not found.");
   const deal = deals[index];
   deals.splice(index, 1);
   saveDeals(deals);
   ctx.answerCbQuery("Deal rejected.");
   ctx.reply("You rejected the deal.");
-  try {
-    await ctx.telegram.sendMessage(deal.buyer, `Seller rejected your deal (ID: ${dealId}).`);
-  } catch (err) {}
+  try { await ctx.telegram.sendMessage(deal.buyer, `Seller rejected your deal (ID: ${dealId}).`); } catch {}
 });
 
-// ===== Buyer Marks as Paid =====
+// ===== BUYER MARKS PAID =====
 bot.action(/PAID_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
   const deals = getDeals();
-  const deal = deals.find((d) => d.dealId === dealId);
+  const deal = deals.find(d => d.dealId === dealId);
   if (!deal) return ctx.reply("Deal not found.");
-  deal.status = "paid";
-  saveDeals(deals);
 
+  deal.status = 'paid';
+  saveDeals(deals);
   ctx.answerCbQuery("Payment marked as sent.");
   ctx.reply("Payment marked as sent. Waiting for admin release.");
 
-  try {
-    const sellerId = users[deal.seller] || deal.seller;
-    await ctx.telegram.sendMessage(sellerId, `Buyer has sent payment for Deal ID: ${dealId}. Waiting for admin release.`);
-  } catch (err) {}
+  // Notify seller owner manually confirms
 });
 
-// ===== Admin Release =====
-bot.command("release", (ctx) => {
+// ===== ADMIN RELEASE =====
+bot.command('release', async (ctx) => {
   if (ctx.from.id != process.env.ADMIN_ID) return;
-  const args = ctx.message.text.split(" ");
+  const args = ctx.message.text.split(' ');
   const dealId = args[1];
   const deals = getDeals();
-  const deal = deals.find((d) => d.dealId === dealId);
+  const deal = deals.find(d => d.dealId === dealId);
   if (!deal) return ctx.reply("Deal not found.");
 
-  deal.status = "completed";
+  deal.status = 'completed';
   saveDeals(deals);
   ctx.reply(`Deal ${dealId} released.`);
 
   try {
     const sellerId = users[deal.seller] || deal.seller;
-    ctx.telegram.sendMessage(deal.buyer, `Deal ${dealId} completed!`);
-    ctx.telegram.sendMessage(sellerId, `Deal ${dealId} completed! You received ${deal.sellerReceives} ${deal.currency}.`);
+    await ctx.telegram.sendMessage(deal.buyer, `🎉 Deal ${dealId} completed!`);
+    await ctx.telegram.sendMessage(sellerId, `🎉 Deal ${dealId} completed! You received ${deal.sellerReceives} ${deal.currency}.`);
   } catch (err) {}
 });
 
-// ===== My Deals with Buttons =====
-bot.action("MY_DEALS", async (ctx) => {
+// ===== MY DEALS =====
+bot.action('MY_DEALS', async (ctx) => {
   await ctx.answerCbQuery();
   const deals = getDeals();
-  const userDeals = deals.filter((d) => d.buyer === ctx.from.id || users[d.seller] === ctx.from.id);
-  if (userDeals.length === 0) return ctx.reply("No deals found.");
+  const userDeals = deals.filter(d => d.buyer === ctx.from.id || users[d.seller] === ctx.from.id);
+  if (!userDeals.length) return ctx.reply("No deals found.");
 
-  for (const d of userDeals) {
-    let msg = `Deal ID: ${d.dealId}\nBuyer: ${d.buyer}\nSeller: ${d.seller}\nAmount: ${d.amount} ${d.currency}\nStatus: ${d.status}\n`;
-    let buttons = [];
-    if (ctx.from.id === d.buyer && d.status === "waiting_payment") {
-      buttons.push([Markup.button.callback("💰 Mark as Paid", `PAID_${d.dealId}`)]);
+for (const d of userDeals) {
+  const buttons = [];
+  if (ctx.from.id === d.buyer && d.status === 'waiting_payment') {
+    buttons.push([Markup.button.callback('💰 Mark as Paid', `PAID_${d.dealId}`)]);
+  }
+
+  buttons.push([Markup.button.callback('💬 Chat', `CHAT_${d.dealId}`)]);
+
+  // ✅ Add this for file buttons
+  if (d.files && d.files.length > 0) {
+    buttons.push(...fileButtons(d));
+  }
+
+  await ctx.reply(
+    `Deal ID: ${d.dealId}\nBuyer: ${d.buyer}\nSeller: ${d.seller}\nAmount: ${d.amount} ${d.currency}\nStatus: ${d.status}\nProject: ${d.description}`,
+    Markup.inlineKeyboard(buttons)
+  );
+}
+});
+
+// ===== HANDLE FILE BUTTON CLICK (auto-send to other party) =====
+bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const dealId = ctx.match[1];
+  const fileIndex = parseInt(ctx.match[2]);
+  const deals = getDeals();
+  const deal = deals.find(d => d.dealId === dealId);
+  if (!deal) return ctx.reply("Deal not found.");
+  if (!deal.files || !deal.files[fileIndex]) return ctx.reply("File not found.");
+
+  const file = deal.files[fileIndex];
+
+  // Determine recipient: if clicker is buyer, send to seller; if clicker is seller, send to buyer
+  const recipientId = ctx.from.id === deal.buyer ? users[deal.seller] : deal.buyer;
+  if (!recipientId) return ctx.reply("Other party has not started the bot yet.");
+
+  try {
+    switch (file.type) {
+      case 'document':
+        await ctx.telegram.sendDocument(recipientId, file.file_id, { caption: file.caption || '' });
+        break;
+      case 'photo':
+        await ctx.telegram.sendPhoto(recipientId, file.file_id, { caption: file.caption || '' });
+        break;
+      case 'video':
+        await ctx.telegram.sendVideo(recipientId, file.file_id, { caption: file.caption || '' });
+        break;
+      case 'audio':
+        await ctx.telegram.sendAudio(recipientId, file.file_id, { caption: file.caption || '' });
+        break;
+      case 'voice':
+        await ctx.telegram.sendVoice(recipientId, file.file_id, { caption: file.caption || '' });
+        break;
+      default:
+        ctx.reply("Unknown file type.");
     }
-    buttons.push([Markup.button.callback("💬 Chat", `CHAT_${d.dealId}`)]);
-    await ctx.reply(msg, Markup.inlineKeyboard(buttons));
+    ctx.reply("✅ File sent to the other party.");
+  } catch (err) {
+    console.log("Error sending file:", err);
+    ctx.reply("Failed to send the file.");
   }
 });
 
-// ===== Launch Bot =====
+// ===== LAUNCH BOT =====
 bot.launch();
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
