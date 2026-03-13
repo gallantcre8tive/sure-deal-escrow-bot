@@ -407,7 +407,20 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
   }
 });
 
-// ===== LAUNCH BOT =====
-bot.launch();
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+const express = require("express");
+const { webhookCallback } = require("telegraf");
+
+const app = express();
+
+// Bind Telegraf to Express
+app.use(express.json());
+app.use(webhookCallback(bot, "express"));
+
+// Start Express server on Render port
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Bot listening via webhook on port ${PORT}`);
+});
+
+// Set Telegram webhook
+bot.telegram.setWebhook(`${process.env.RENDER_EXTERNAL_URL}/`);
