@@ -96,7 +96,7 @@ bot.action('CREATE_DEAL', async (ctx) => {
   ctx.reply("Enter the seller's username (e.g., @seller):");
 });
 
-// ===== FILES HANDLER =====
+// ===== HANDLE FILES =====
 bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
   const deals = getDeals();
   const activeDeal = deals.find(
@@ -119,30 +119,13 @@ bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
 
   try {
     await ctx.telegram.sendMessage(recipientId, `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`);
-  } catch (err) {}
+  } catch (err) {
+    console.log("Error sending file notification:", err);
+  }
 
-  ctx.reply("✅ File received and forwarded to the other party.");
+  await ctx.reply("✅ File received and forwarded to the other party.");
 });
-
-  // Save file to deal
-  if (!activeDeal.files) activeDeal.files = [];
-  const fileInfo = ctx.message.document || ctx.message.photo?.[ctx.message.photo.length-1] || ctx.message.video || ctx.message.audio || ctx.message.voice;
-  activeDeal.files.push({
-    from: ctx.from.id,
-    file_id: fileInfo.file_id,
-    type: ctx.updateType,
-    caption: ctx.message.caption || null
-  });
-  saveDeals(deals);
-
-  // Notify the other party
-  const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
-  try {
-    await ctx.telegram.sendMessage(recipientId, `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`);
-  } catch (err) {}
-
-  ctx.reply("✅ File received and forwarded to the other party.");
-});
+  
 
   // ===== Deal Creation =====
   if (state && state.step) {
