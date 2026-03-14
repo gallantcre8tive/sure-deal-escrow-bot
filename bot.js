@@ -96,11 +96,7 @@ bot.action('CREATE_DEAL', async (ctx) => {
   ctx.reply("Enter the seller's username (e.g., @seller):");
 });
 
-// ===== HANDLE TEXT INPUT =====
-bot.on('text', async (ctx) => {
-  const state = userStates[ctx.from.id];
-  const msg = ctx.message.text.trim();
-  // ===== FILES HANDLER =====
+// ===== FILES HANDLER =====
 bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
   const deals = getDeals();
   const activeDeal = deals.find(
@@ -108,6 +104,25 @@ bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
          ['waiting_payment', 'paid', 'in_progress'].includes(d.status)
   );
   if (!activeDeal) return ctx.reply("No active deal for file upload.");
+
+  if (!activeDeal.files) activeDeal.files = [];
+  const fileInfo = ctx.message.document || ctx.message.photo?.[ctx.message.photo.length-1] || ctx.message.video || ctx.message.audio || ctx.message.voice;
+  activeDeal.files.push({
+    from: ctx.from.id,
+    file_id: fileInfo.file_id,
+    type: ctx.updateType,
+    caption: ctx.message.caption || null
+  });
+  saveDeals(deals);
+
+  const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
+
+  try {
+    await ctx.telegram.sendMessage(recipientId, `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`);
+  } catch (err) {}
+
+  ctx.reply("✅ File received and forwarded to the other party.");
+});
 
   // Save file to deal
   if (!activeDeal.files) activeDeal.files = [];
@@ -152,7 +167,10 @@ bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
       const amount = Number(parts[0]);
       const currency = parts[1].toUpperCase();
       if (isNaN(amount) || amount <= 0) return ctx.reply("Invalid amount.");
-      if (!wallets[currency]) return ctx.reply("Currency not supported.");
+      const supportedCurrencies = ['USDT','BTC','ETH'];
+if (!supportedCurrencies.includes(currency)) {
+  return ctx.reply("Currency not supported.");
+}
 
       const { fee, sellerReceives } = calculateFee(amount);
       dealData.amount = amount;
@@ -260,32 +278,63 @@ bot.action('CANCEL_DEAL', async (ctx) => {
   ctx.reply("❌ Deal creation canceled.");
 });
 
-// ===== SELLER ACCEPT / REJECT =====
+// ===== SELLER ACCEPT =====
 bot.action(/ACCEPT_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
   const deals = getDeals();
   const deal = deals.find(d => d.dealId === dealId);
   if (!deal) return ctx.reply("Deal not found.");
 
+  // Update deal status
   deal.status = 'waiting_payment';
   saveDeals(deals);
 
-  ctx.answerCbQuery("Deal accepted!");
-  ctx.reply("You accepted the deal. Waiting for buyer payment...");
+  // Answer callback for seller
+  await ctx.answerCbQuery("Deal accepted!");
 
+  // Notify seller in chat
+  await ctx.reply("You accepted the deal. Waiting for buyer payment...");
+
+  // Get buyer ID
+  const buyerId = deal.buyer;
+
+  // Generate unique wallet address for this deal
+  const walletAddress = wallets(deal.currency, deal.dealId);
+
+  // Send payment instructions to buyer
   try {
-    await ctx.telegram.sendMessage(deal.buyer, `✅ Seller accepted! Send payment to escrow.\nAmount: ${deal.amount} ${deal.currency}\nYou have 30 minutes for payment confirmation.`);
-  } catch (err) {}
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `✅ Seller accepted the deal!\n\n` +
+      `Send payment to the escrow wallet below.\n\n` +
+      `Deal ID: ${deal.dealId}\n` +
+      `Amount: ${deal.amount} ${deal.currency}\n` +
+      `Escrow Fee: ${deal.fee} ${deal.currency}\n` +
+      `Seller receives: ${deal.sellerReceives} ${deal.currency}\n\n` +
+      `Escrow Wallet:\n${walletAddress}\n\n` +
+      `After sending payment screenshot, click "Mark as Paid".\n` +
+      `You have 30 minutes to complete payment.`
+    );
+  } catch (err) {
+    console.log("Error sending payment instructions:", err);
+  }
 
-  // Start 30-min timeout
+  // Start 30-min reminder in case payment isn't marked
   if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
   paymentTimers[dealId] = setTimeout(async () => {
     const currentDeals = getDeals();
     const updatedDeal = currentDeals.find(d => d.dealId === dealId);
     if (updatedDeal && updatedDeal.status === 'waiting_payment') {
-      await ctx.telegram.sendMessage(deal.buyer, `⚠️ Payment not confirmed within 30 minutes. Contact support via /help and provide your Deal ID: ${dealId}`);
+      try {
+        await ctx.telegram.sendMessage(
+          buyerId,
+          `⚠️ Payment not confirmed within 30 minutes. Please mark as paid or contact support via /help with your Deal ID: ${dealId}`
+        );
+      } catch (err) {
+        console.log("Error sending 30-min reminder:", err);
+      }
     }
-  }, 30 * 60 * 1000);
+  }, 30 * 60 * 1000); // 30 minutes
 });
 
 // ===== REJECT DEAL =====
