@@ -22,7 +22,6 @@ function fileButtons(deal) {
   ]);
 }
 
-
 // 3️⃣ Create bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -125,9 +124,13 @@ bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
 
   await ctx.reply("✅ File received and forwarded to the other party.");
 });
-  
 
-  // ===== Deal Creation =====
+// ===== HANDLE TEXT INPUT =====
+bot.on('text', async (ctx) => {
+  const state = userStates[ctx.from.id];
+  const msg = ctx.message.text.trim();
+
+  // ===== Deal Creation Flow =====
   if (state && state.step) {
     const dealData = state.dealData;
 
@@ -151,9 +154,9 @@ bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
       const currency = parts[1].toUpperCase();
       if (isNaN(amount) || amount <= 0) return ctx.reply("Invalid amount.");
       const supportedCurrencies = ['USDT','BTC','ETH'];
-if (!supportedCurrencies.includes(currency)) {
-  return ctx.reply("Currency not supported.");
-}
+      if (!supportedCurrencies.includes(currency)) {
+        return ctx.reply("Currency not supported.");
+      }
 
       const { fee, sellerReceives } = calculateFee(amount);
       dealData.amount = amount;
@@ -272,19 +275,12 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
   deal.status = 'waiting_payment';
   saveDeals(deals);
 
-  // Answer callback for seller
   await ctx.answerCbQuery("Deal accepted!");
-
-  // Notify seller in chat
   await ctx.reply("You accepted the deal. Waiting for buyer payment...");
 
-  // Get buyer ID
   const buyerId = deal.buyer;
-
-  // Generate unique wallet address for this deal
   const walletAddress = wallets(deal.currency, deal.dealId);
 
-  // Send payment instructions to buyer
   try {
     await ctx.telegram.sendMessage(
       buyerId,
@@ -302,7 +298,7 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
     console.log("Error sending payment instructions:", err);
   }
 
-  // Start 30-min reminder in case payment isn't marked
+  // Start 30-min reminder
   if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
   paymentTimers[dealId] = setTimeout(async () => {
     const currentDeals = getDeals();
@@ -317,7 +313,7 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
         console.log("Error sending 30-min reminder:", err);
       }
     }
-  }, 30 * 60 * 1000); // 30 minutes
+  }, 30 * 60 * 1000);
 });
 
 // ===== REJECT DEAL =====
@@ -329,7 +325,7 @@ bot.action(/REJECT_(.+)/, async (ctx) => {
   const deal = deals[index];
   deals.splice(index, 1);
   saveDeals(deals);
-  ctx.answerCbQuery("Deal rejected.");
+  await ctx.answerCbQuery("Deal rejected.");
   ctx.reply("You rejected the deal.");
   try { await ctx.telegram.sendMessage(deal.buyer, `Seller rejected your deal (ID: ${dealId}).`); } catch {}
 });
@@ -343,10 +339,8 @@ bot.action(/PAID_(.+)/, async (ctx) => {
 
   deal.status = 'paid';
   saveDeals(deals);
-  ctx.answerCbQuery("Payment marked as sent.");
+  await ctx.answerCbQuery("Payment marked as sent.");
   ctx.reply("Payment marked as sent. Waiting for admin release.");
-
-  // Notify seller owner manually confirms
 });
 
 // ===== ADMIN RELEASE =====
@@ -376,27 +370,24 @@ bot.action('MY_DEALS', async (ctx) => {
   const userDeals = deals.filter(d => d.buyer === ctx.from.id || users[d.seller] === ctx.from.id);
   if (!userDeals.length) return ctx.reply("No deals found.");
 
-for (const d of userDeals) {
-  const buttons = [];
-  if (ctx.from.id === d.buyer && d.status === 'waiting_payment') {
-    buttons.push([Markup.button.callback('💰 Mark as Paid', `PAID_${d.dealId}`)]);
+  for (const d of userDeals) {
+    const buttons = [];
+    if (ctx.from.id === d.buyer && d.status === 'waiting_payment') {
+      buttons.push([Markup.button.callback('💰 Mark as Paid', `PAID_${d.dealId}`)]);
+    }
+    buttons.push([Markup.button.callback('💬 Chat', `CHAT_${d.dealId}`)]);
+    if (d.files && d.files.length > 0) {
+      buttons.push(...fileButtons(d));
+    }
+
+    await ctx.reply(
+      `Deal ID: ${d.dealId}\nBuyer: ${d.buyer}\nSeller: ${d.seller}\nAmount: ${d.amount} ${d.currency}\nStatus: ${d.status}\nProject: ${d.description}`,
+      Markup.inlineKeyboard(buttons)
+    );
   }
-
-  buttons.push([Markup.button.callback('💬 Chat', `CHAT_${d.dealId}`)]);
-
-  // ✅ Add this for file buttons
-  if (d.files && d.files.length > 0) {
-    buttons.push(...fileButtons(d));
-  }
-
-  await ctx.reply(
-    `Deal ID: ${d.dealId}\nBuyer: ${d.buyer}\nSeller: ${d.seller}\nAmount: ${d.amount} ${d.currency}\nStatus: ${d.status}\nProject: ${d.description}`,
-    Markup.inlineKeyboard(buttons)
-  );
-}
 });
 
-// ===== HANDLE FILE BUTTON CLICK (auto-send to other party) =====
+// ===== HANDLE FILE BUTTON CLICK =====
 bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
   const dealId = ctx.match[1];
@@ -407,30 +398,17 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
   if (!deal.files || !deal.files[fileIndex]) return ctx.reply("File not found.");
 
   const file = deal.files[fileIndex];
-
-  // Determine recipient: if clicker is buyer, send to seller; if clicker is seller, send to buyer
   const recipientId = ctx.from.id === deal.buyer ? users[deal.seller] : deal.buyer;
   if (!recipientId) return ctx.reply("Other party has not started the bot yet.");
 
   try {
     switch (file.type) {
-      case 'document':
-        await ctx.telegram.sendDocument(recipientId, file.file_id, { caption: file.caption || '' });
-        break;
-      case 'photo':
-        await ctx.telegram.sendPhoto(recipientId, file.file_id, { caption: file.caption || '' });
-        break;
-      case 'video':
-        await ctx.telegram.sendVideo(recipientId, file.file_id, { caption: file.caption || '' });
-        break;
-      case 'audio':
-        await ctx.telegram.sendAudio(recipientId, file.file_id, { caption: file.caption || '' });
-        break;
-      case 'voice':
-        await ctx.telegram.sendVoice(recipientId, file.file_id, { caption: file.caption || '' });
-        break;
-      default:
-        ctx.reply("Unknown file type.");
+      case 'document': await ctx.telegram.sendDocument(recipientId, file.file_id, { caption: file.caption || '' }); break;
+      case 'photo': await ctx.telegram.sendPhoto(recipientId, file.file_id, { caption: file.caption || '' }); break;
+      case 'video': await ctx.telegram.sendVideo(recipientId, file.file_id, { caption: file.caption || '' }); break;
+      case 'audio': await ctx.telegram.sendAudio(recipientId, file.file_id, { caption: file.caption || '' }); break;
+      case 'voice': await ctx.telegram.sendVoice(recipientId, file.file_id, { caption: file.caption || '' }); break;
+      default: ctx.reply("Unknown file type."); return;
     }
     ctx.reply("✅ File sent to the other party.");
   } catch (err) {
@@ -440,14 +418,11 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
 });
 
 // ===== START BOT ON RENDER (WEBHOOK) =====
-
 const PORT = process.env.PORT || 3000;
-
 bot.launch({
   webhook: {
     domain: process.env.RENDER_EXTERNAL_URL,
     port: PORT
   }
 });
-
 console.log("Bot running with webhook...");
