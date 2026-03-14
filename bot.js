@@ -96,33 +96,165 @@ bot.action('CREATE_DEAL', async (ctx) => {
 });
 
 // ===== HANDLE FILES =====
-bot.on(['document', 'photo', 'video', 'audio', 'voice'], async (ctx) => {
+bot.on(['document','photo','video','audio','voice'], async (ctx) => {
+
   const deals = getDeals();
+
   const activeDeal = deals.find(
-    d => (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id) &&
-         ['waiting_payment', 'paid', 'in_progress'].includes(d.status)
+    d => (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id)
   );
-  if (!activeDeal) return ctx.reply("No active deal for file upload.");
 
-  if (!activeDeal.files) activeDeal.files = [];
-  const fileInfo = ctx.message.document || ctx.message.photo?.[ctx.message.photo.length-1] || ctx.message.video || ctx.message.audio || ctx.message.voice;
-  activeDeal.files.push({
-    from: ctx.from.id,
-    file_id: fileInfo.file_id,
-    type: ctx.updateType,
-    caption: ctx.message.caption || null
-  });
-  saveDeals(deals);
-
-  const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
-
-  try {
-    await ctx.telegram.sendMessage(recipientId, `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`);
-  } catch (err) {
-    console.log("Error sending file notification:", err);
+  if (!activeDeal) {
+    return ctx.reply("No active deal found.");
   }
 
-  await ctx.reply("✅ File received and forwarded to the other party.");
+  const file =
+    ctx.message.document ||
+    ctx.message.photo?.[ctx.message.photo.length - 1] ||
+    ctx.message.video ||
+    ctx.message.audio ||
+    ctx.message.voice;
+
+  // ===== PAYMENT SCREENSHOT FLOW =====
+  if (activeDeal.status === "waiting_payment" && ctx.from.id === activeDeal.buyer) {
+
+    await ctx.reply("⏳ Payment proof received. Please hold on while we confirm the transaction.");
+
+    const adminId = process.env.ADMIN_ID;
+
+    try {
+
+      await ctx.telegram.sendPhoto(
+        adminId,
+        file.file_id,
+        {
+          caption:
+`💰 PAYMENT PROOF RECEIVED
+
+Deal ID: ${activeDeal.dealId}
+
+Buyer: ${ctx.from.username || ctx.from.first_name}
+
+Seller: ${activeDeal.seller}
+
+Amount: ${activeDeal.amount} ${activeDeal.currency}`,
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback("✅ Confirm Payment", `ADMIN_CONFIRM_${activeDeal.dealId}`)
+            ],
+            [
+              Markup.button.callback("⏳ Not Yet Received", `ADMIN_REJECT_${activeDeal.dealId}`)
+            ]
+          ])
+        }
+      );
+
+    } catch (err) {
+      console.log("Error sending screenshot to admin:", err);
+    }
+
+    return;
+  }
+
+  // ===== NORMAL FILE SHARING AFTER PAYMENT =====
+  if (["paid","in_progress"].includes(activeDeal.status)) {
+
+    if (!activeDeal.files) activeDeal.files = [];
+
+    activeDeal.files.push({
+      from: ctx.from.id,
+      file_id: file.file_id,
+      type: ctx.updateType,
+      caption: ctx.message.caption || null
+    });
+
+    saveDeals(deals);
+
+    const recipientId =
+      ctx.from.id === activeDeal.buyer
+        ? users[activeDeal.seller]
+        : activeDeal.buyer;
+
+    try {
+      await ctx.telegram.sendMessage(
+        recipientId,
+        `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`
+      );
+    } catch (err) {
+      console.log("File notification error:", err);
+    }
+
+    await ctx.reply("✅ File received and forwarded to the other party.");
+  }
+
+});
+
+// ===== ADMIN CONFIRM PAYMENT =====
+bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
+
+  if (ctx.from.id != process.env.ADMIN_ID) {
+    return ctx.answerCbQuery("Not authorized");
+  }
+
+  const dealId = ctx.match[1];
+
+  const deals = getDeals();
+  const deal = deals.find(d => d.dealId === dealId);
+
+  if (!deal) return ctx.reply("Deal not found.");
+
+  deal.status = "paid";
+
+  saveDeals(deals);
+
+  await ctx.answerCbQuery("Payment confirmed");
+
+  const sellerId = users[deal.seller];
+
+  try {
+
+    await ctx.telegram.sendMessage(
+      sellerId,
+      `✅ Payment has been confirmed by escrow.
+
+The buyer has completed payment.
+
+Please proceed with the project.`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✔ OK", "SELLER_OK")]
+      ])
+    );
+
+  } catch (err) {
+    console.log(err);
+  }
+
+});
+
+
+// ===== ADMIN REJECT PAYMENT =====
+bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
+
+  if (ctx.from.id != process.env.ADMIN_ID) {
+    return ctx.answerCbQuery("Not authorized");
+  }
+
+  const dealId = ctx.match[1];
+
+  const deals = getDeals();
+  const deal = deals.find(d => d.dealId === dealId);
+
+  if (!deal) return ctx.reply("Deal not found.");
+
+  await ctx.answerCbQuery("Marked as not received");
+
+  await ctx.telegram.sendMessage(
+    deal.buyer,
+`⚠️ The screenshot provided does not look like a valid transaction proof.
+
+Please send a clear and real screenshot of the completed crypto transaction.`
+  );
+
 });
 
 // ===== HANDLE TEXT INPUT =====
