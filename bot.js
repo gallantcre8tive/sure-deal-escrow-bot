@@ -95,7 +95,7 @@ bot.action('CREATE_DEAL', async (ctx) => {
   ctx.reply("Enter the seller's username (e.g., @seller):");
 });
 
-// ===== HANDLE FILES =====
+// ===== HANDLE FILES (SECURE VERSION) =====
 bot.on(['document','photo','video','audio','voice'], async (ctx) => {
 
   const deals = getDeals();
@@ -117,6 +117,14 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
 
   // ===== PAYMENT SCREENSHOT FLOW =====
   if (activeDeal.status === "waiting_payment" && ctx.from.id === activeDeal.buyer) {
+
+    // prevent screenshot spam
+    if (activeDeal.screenshotSubmitted) {
+      return ctx.reply("⚠️ Payment screenshot already submitted. Please wait for escrow confirmation.");
+    }
+
+    activeDeal.screenshotSubmitted = true;
+    saveDeals(deals);
 
     await ctx.reply("⏳ Payment proof received. Please hold on while we confirm the transaction.");
 
@@ -156,7 +164,7 @@ Amount: ${activeDeal.amount} ${activeDeal.currency}`,
     return;
   }
 
-  // ===== NORMAL FILE SHARING AFTER PAYMENT =====
+  // ===== NORMAL FILE SHARING =====
   if (["paid","in_progress"].includes(activeDeal.status)) {
 
     if (!activeDeal.files) activeDeal.files = [];
@@ -181,7 +189,7 @@ Amount: ${activeDeal.amount} ${activeDeal.currency}`,
         `📂 ${ctx.from.first_name} sent a file for Deal ID: ${activeDeal.dealId}`
       );
     } catch (err) {
-      console.log("File notification error:", err);
+      console.log(err);
     }
 
     await ctx.reply("✅ File received and forwarded to the other party.");
@@ -204,7 +212,6 @@ bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   if (!deal) return ctx.reply("Deal not found.");
 
   deal.status = "paid";
-
   saveDeals(deals);
 
   await ctx.answerCbQuery("Payment confirmed");
@@ -231,7 +238,6 @@ Please proceed with the project.`,
 
 });
 
-
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
 
@@ -245,6 +251,9 @@ bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
   const deal = deals.find(d => d.dealId === dealId);
 
   if (!deal) return ctx.reply("Deal not found.");
+
+  deal.screenshotSubmitted = false;
+  saveDeals(deals);
 
   await ctx.answerCbQuery("Marked as not received");
 
@@ -314,6 +323,91 @@ bot.on('text', async (ctx) => {
     return;
   }
 
+  // ===== PAYMENT METHOD SELECTION =====
+
+bot.action("SELECT_PAYMENT", async (ctx) => {
+
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    "Select payment method:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("USDT", "PAY_USDT")],
+      [Markup.button.callback("BTC", "PAY_BTC")],
+      [Markup.button.callback("ETH", "PAY_ETH")],
+      [Markup.button.callback("SOL", "PAY_SOL")],
+      [Markup.button.callback("LTC", "PAY_LTC")]
+    ])
+  );
+
+});
+
+// ===== USDT NETWORK SELECTION =====
+
+bot.action("PAY_USDT", async (ctx) => {
+
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    "Select USDT network:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("TRC20", "NET_USDT_TRC20")],
+      [Markup.button.callback("ERC20", "NET_USDT_ERC20")],
+      [Markup.button.callback("BEP20", "NET_USDT_BEP20")],
+      [Markup.button.callback("SOLANA", "NET_USDT_SOLANA")]
+    ])
+  );
+
+});
+
+const wallets = require('./config/wallets');
+
+bot.action(/NET_USDT_(.+)/, async (ctx) => {
+
+  await ctx.answerCbQuery();
+
+  const network = ctx.match[1];
+
+  const address = wallets.USDT[network];
+
+  if (!address) {
+    return ctx.reply("Wallet not configured.");
+  }
+
+  await ctx.reply(
+`Send payment to:
+
+USDT (${network})
+
+Address:
+${address}
+
+After sending payment, upload the transaction screenshot here.`
+  );
+
+});
+
+bot.action(/PAY_(BTC|ETH|SOL|LTC)/, async (ctx) => {
+
+  await ctx.answerCbQuery();
+
+  const currency = ctx.match[1];
+
+  const network = Object.keys(wallets[currency])[0];
+  const address = wallets[currency][network];
+
+  await ctx.reply(
+`Send payment to:
+
+${currency}
+
+Address:
+${address}
+
+After sending payment, upload the transaction screenshot here.`
+  );
+
+});
   // ===== CHAT FLOW =====
   const deals = getDeals();
   const activeDeal = deals.find(
