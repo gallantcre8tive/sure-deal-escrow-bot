@@ -130,22 +130,25 @@ bot.action('HELP_SUBMIT', async (ctx) => {
 
 // ===== HANDLE HELP MESSAGES =====
 if (state?.step === 'awaitingHelpMessage') {
+
   const adminId = process.env.ADMIN_ID;
   const userMsg = msg;
   const fromUser = `@${ctx.from.username || ctx.from.first_name} (ID: ${ctx.from.id})`;
 
   try {
     await ctx.reply("✅ Your message has been sent to support. They will reply soon.");
+
     await ctx.telegram.sendMessage(
       adminId,
       `📩 Help request from ${fromUser}\n\nMessage:\n${userMsg}`
     );
+
   } catch (err) {
     console.log("Error forwarding help message:", err);
     await ctx.reply("❌ Failed to send message to admin. Try again later.");
   }
 
-  delete userStates[ctx.from.id]; // clear the state
+  delete userStates[ctx.from.id];
   return;
 }
 
