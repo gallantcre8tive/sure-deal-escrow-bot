@@ -101,11 +101,15 @@ bot.action('PROFILE', async (ctx) => {
 bot.action('VIEW_REVIEWS', async (ctx) => {
   const allReviews = getAllReviews();
 
-  // Show last 10 reviews for simplicity
-  const reviewsText = allReviews.slice(-10).map(r => `⭐`.repeat(r.rating) + `\n"${r.text}"`).join('\n\n');
+  // Show last 10 reviews
+  const reviewsText = allReviews
+    .slice(-10)
+    .map(r => `⭐`.repeat(r.rating) + `\n"${r.text}"`)
+    .join('\n\n');
 
-  await ctx.reply(`📝 Recent Reviews:\n\n${reviewsText}`);
+  await ctx.reply(`📝 Recent Reviews:\n\n${reviewsText || "No reviews yet."}`);
 });
+
 
 // ===== HELP SYSTEM =====
 bot.command('help', async (ctx) => {
@@ -119,46 +123,32 @@ bot.command('help', async (ctx) => {
   );
 });
 
+
 // ===== HELP / SUPPORT FLOW =====
 bot.action('HELP_SUBMIT', async (ctx) => {
   await ctx.answerCbQuery();
+
   await ctx.reply("📝 Please type your message or Deal ID:");
 
-  // Set user state so main bot.on('text') can handle the next message
-  userStates[ctx.from.id] = { step: 'awaitingHelpMessage' };
+  // Save user state so main text handler processes next message
+  userStates[ctx.from.id] = {
+    step: 'awaitingHelpMessage'
+  };
 });
-
-// ===== HANDLE HELP MESSAGES =====
-if (state?.step === 'awaitingHelpMessage') {
-
-  const adminId = process.env.ADMIN_ID;
-  const userMsg = msg;
-  const fromUser = `@${ctx.from.username || ctx.from.first_name} (ID: ${ctx.from.id})`;
-
-  try {
-    await ctx.reply("✅ Your message has been sent to support. They will reply soon.");
-
-    await ctx.telegram.sendMessage(
-      adminId,
-      `📩 Help request from ${fromUser}\n\nMessage:\n${userMsg}`
-    );
-
-  } catch (err) {
-    console.log("Error forwarding help message:", err);
-    await ctx.reply("❌ Failed to send message to admin. Try again later.");
-  }
-
-  delete userStates[ctx.from.id];
-  return;
-}
 
 
 // ===== CREATE DEAL FLOW =====
 bot.action('CREATE_DEAL', async (ctx) => {
   await ctx.answerCbQuery();
-  userStates[ctx.from.id] = { step: 'awaitingSeller', dealData: {} };
-  ctx.reply("Enter the seller's username (e.g., @seller):");
+
+  userStates[ctx.from.id] = {
+    step: 'awaitingSeller',
+    dealData: {}
+  };
+
+  await ctx.reply("Enter the seller's username (e.g., @seller):");
 });
+
 
 // ===== HANDLE FILES (SECURE VERSION) =====
 bot.on(['document','photo','video','audio','voice'], async (ctx) => {
@@ -183,7 +173,6 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
   // ===== PAYMENT SCREENSHOT FLOW =====
   if (activeDeal.status === "waiting_payment" && ctx.from.id === activeDeal.buyer) {
 
-    // prevent screenshot spam
     if (activeDeal.screenshotSubmitted) {
       return ctx.reply("⚠️ Payment screenshot already submitted. Please wait for escrow confirmation.");
     }
@@ -229,6 +218,7 @@ Amount: ${activeDeal.amount} ${activeDeal.currency}`,
     return;
   }
 
+});
   // ===== NORMAL FILE SHARING =====
   if (["paid","in_progress"].includes(activeDeal.status)) {
 
@@ -832,7 +822,8 @@ if (state?.step === 'awaitingDealId') {
     return;
   }
 
-  const statusEmoji = deal.status === 'completed' ? '✅' : (deal.status === 'waiting_payment' ? '⏳' : '⚠️');
+  const statusEmoji = deal.status === 'completed' ? '✅' :
+                      deal.status === 'waiting_payment' ? '⏳' : '⚠️';
 
   await ctx.reply(
     `📄 Deal ID: ${deal.dealId}\n` +
