@@ -27,4 +27,26 @@ const wallets = {
 
 };
 
-module.exports = wallets;
+/**
+ * Generate deal-specific wallet address
+ * @param {string} currency - USDT/BTC/ETH/SOL/LTC
+ * @param {string} dealId - unique deal ID
+ * @param {string} network - optional network for USDT
+ * @returns {string} address including deal memo/tag
+ */
+function generateWalletAddress(currency, dealId, network = null) {
+  if (!WALLET_ADDRESSES[currency]) throw new Error('Currency not supported');
+
+  let baseAddress;
+  if (currency === 'USDT') {
+    if (!network || !WALLET_ADDRESSES.USDT[network])
+      throw new Error('USDT network not supported');
+    baseAddress = WALLET_ADDRESSES.USDT[network];
+    return `${baseAddress}?memo=${dealId}`; // memo/tag for traceability
+  } else {
+    baseAddress = WALLET_ADDRESSES[currency][currency];
+    return `${baseAddress}?memo=${dealId}`;
+  }
+}
+
+module.exports = generateWalletAddress;

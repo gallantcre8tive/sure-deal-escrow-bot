@@ -6,11 +6,13 @@ const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
 const path = require('path');
 const { getDeals, saveDeals } = require('./utils/storage');
-const wallets = require('./config/wallets');
+const address = wallets.USDT[network]; // network must be defined
 const generateDealId = require('./utils/generateDealId');
 const { calculateFee } = require('./services/feeService');
-const { getUserReviews, saveUserReview } = require('./services/reviewService');
-
+const { getAllReviews, addReview, getAverageRating, getTotalReviews } = require('./data/reviews');
+function getUserReviews(userId) {
+  return getAllReviews().filter(r => r.userId === userId);
+}
 // ===== Helper to create file buttons =====
 function fileButtons(deal) {
   if (!deal.files || deal.files.length === 0) return [];
@@ -58,35 +60,95 @@ bot.start(async (ctx) => {
   );
 });
 
-// ===== HELP BUTTON =====
-bot.action('HELP', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.reply(
-    "Sure Deal Escrow Bot Help:\n\n" +
-    "- 💼 Create Deal: Start a new escrow deal\n" +
-    "- 📄 My Deals: View your active deals and chat\n" +
-    "- 👤 Profile: See your reviews and completed deals\n" +
-    "- ❓ Help: This menu\n" +
-    "\nIf payment is not confirmed after 30 minutes, submit your Deal ID via this menu to contact support."
-  );
-});
-
-// ===== PROFILE BUTTON =====
 bot.action('PROFILE', async (ctx) => {
   await ctx.answerCbQuery();
+
+  // ===== Bot Info =====
+  const botName = "Sure Deal Escrow";
+  const botBio = "🔒 Secure crypto escrow – safe, fast, and reliable.";
+  function getTotalDealsCompleted() {
+  return getDeals().filter(d => d.status === 'completed').length;
+}
+  const averageRating = getAverageRating();
+  const totalReviews = getTotalReviews();
+
+  // ===== User Info =====
   const userId = ctx.from.id;
   const reviews = getUserReviews(userId);
-  const totalDeals = getDeals().filter(d => d.buyer === userId || users[d.seller] === userId).length;
+  const userDeals = getDeals().filter(d => d.buyer === userId || users[d.seller] === userId).length;
+  const userAvg = reviews.length ? (reviews.reduce((a,b) => a+b.rating,0)/reviews.length).toFixed(1) : 0;
 
-  if (reviews.length === 0) return ctx.reply(`No reviews yet. Total Deals: ${totalDeals}`);
-  const avg = reviews.reduce((a, b) => a + b.rating, 0) / reviews.length;
-  ctx.reply(
-    `👤 Profile\n\n` +
-    `Total Reviews: ${reviews.length}\n` +
-    `Average Rating: ${avg.toFixed(1)} ⭐\n` +
-    `Total Deals: ${totalDeals}`
+  await ctx.reply(
+    `${botName}\n${botBio}\n\n` +
+    `Deals Completed (Bot-wide): ${totalDeals}\n` +
+    `Average Rating (Bot-wide): ⭐ ${averageRating}/5\n` +
+    `Total Reviews (Bot-wide): ${totalReviews}\n\n` +
+    `Your Profile:\nTotal Reviews: ${reviews.length}\n` +
+    `Average Rating: ⭐ ${userAvg}\n` +
+    `Total Deals: ${userDeals}`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "⭐ View Reviews", callback_data: 'VIEW_REVIEWS' }],
+          [{ text: "📊 Deal Statistics", callback_data: 'DEAL_STATS' }]
+        ]
+      }
+    }
   );
 });
+
+// ===== VIEW REVIEWS BUTTON =====
+bot.action('VIEW_REVIEWS', async (ctx) => {
+  const allReviews = getAllReviews();
+
+  // Show last 10 reviews for simplicity
+  const reviewsText = allReviews.slice(-10).map(r => `⭐`.repeat(r.rating) + `\n"${r.text}"`).join('\n\n');
+
+  await ctx.reply(`📝 Recent Reviews:\n\n${reviewsText}`);
+});
+
+// ===== HELP SYSTEM =====
+bot.command('help', async (ctx) => {
+  await ctx.reply(
+    "💼 Sure Deal Escrow Help\n\n" +
+    "Please describe your issue or provide your Deal ID if relevant.\n" +
+    "Your message will be sent directly to our support team.",
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Submit Query', 'HELP_SUBMIT')]
+    ])
+  );
+});
+
+// ===== HELP / SUPPORT FLOW =====
+bot.action('HELP_SUBMIT', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply("📝 Please type your message or Deal ID:");
+
+  // Set user state so main bot.on('text') can handle the next message
+  userStates[ctx.from.id] = { step: 'awaitingHelpMessage' };
+});
+
+// ===== HANDLE HELP MESSAGES =====
+if (state?.step === 'awaitingHelpMessage') {
+  const adminId = process.env.ADMIN_ID;
+  const userMsg = msg;
+  const fromUser = `@${ctx.from.username || ctx.from.first_name} (ID: ${ctx.from.id})`;
+
+  try {
+    await ctx.reply("✅ Your message has been sent to support. They will reply soon.");
+    await ctx.telegram.sendMessage(
+      adminId,
+      `📩 Help request from ${fromUser}\n\nMessage:\n${userMsg}`
+    );
+  } catch (err) {
+    console.log("Error forwarding help message:", err);
+    await ctx.reply("❌ Failed to send message to admin. Try again later.");
+  }
+
+  delete userStates[ctx.from.id]; // clear the state
+  return;
+}
+
 
 // ===== CREATE DEAL FLOW =====
 bot.action('CREATE_DEAL', async (ctx) => {
@@ -200,9 +262,9 @@ Amount: ${activeDeal.amount} ${activeDeal.currency}`,
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
 
-  if (ctx.from.id != process.env.ADMIN_ID) {
-    return ctx.answerCbQuery("Not authorized");
-  }
+if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
+  return ctx.answerCbQuery("Not authorized");
+}
 
   const dealId = ctx.match[1];
 
@@ -241,9 +303,9 @@ Please proceed with the project.`,
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
 
-  if (ctx.from.id != process.env.ADMIN_ID) {
-    return ctx.answerCbQuery("Not authorized");
-  }
+if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
+  return ctx.answerCbQuery("Not authorized");
+}
 
   const dealId = ctx.match[1];
 
@@ -266,11 +328,82 @@ Please send a clear and real screenshot of the completed crypto transaction.`
 
 });
 
-// ===== HANDLE TEXT INPUT =====
 bot.on('text', async (ctx) => {
-  const state = userStates[ctx.from.id];
-  const msg = ctx.message.text.trim();
+    const state = userStates[ctx.from.id];
+    const msg = ctx.message.text.trim();
 
+    // ===== ROUTE BASED ON USER STATE =====
+
+    // Review submission
+    if (state?.step === 'awaitingReview') {
+        addReview(state.rating, msg, state.role);
+        ctx.reply("⭐ Review recorded!");
+        delete userStates[ctx.from.id];
+        return;
+    }
+
+    // Deal creation: seller username
+    if (state?.step === 'awaitingSeller') {
+        state.dealData.seller = msg;
+        state.step = 'awaitingDescription';
+        return ctx.reply("Enter the project description for this deal:");
+    }
+
+    // Deal creation: description
+    if (state?.step === 'awaitingDescription') {
+        state.dealData.description = msg;
+        state.step = 'awaitingAmountCurrency';
+        return ctx.reply("Enter the deal amount and currency (e.g., 50 USDT):");
+    }
+
+    // Deal creation: amount and currency
+    if (state?.step === 'awaitingAmountCurrency') {
+        const parts = msg.split(' ');
+        if (parts.length !== 2) return ctx.reply("Format: <amount> <currency> (e.g., 50 USDT)");
+        const amount = Number(parts[0]);
+        const currency = parts[1].toUpperCase();
+        const supportedCurrencies = ['USDT','BTC','ETH'];
+        if (isNaN(amount) || amount <= 0) return ctx.reply("Invalid amount.");
+        if (!supportedCurrencies.includes(currency)) return ctx.reply("Currency not supported.");
+
+        const { fee, sellerReceives } = calculateFee(amount);
+        state.dealData.amount = amount;
+        state.dealData.currency = currency;
+        state.dealData.fee = fee;
+        state.dealData.sellerReceives = sellerReceives;
+        state.step = 'confirmDeal';
+
+        return ctx.reply(
+            `✅ Deal Summary:\n\nSeller: ${state.dealData.seller}\nProject: ${state.dealData.description}\nAmount: ${amount} ${currency}\nEscrow Fee: ${fee} ${currency}\nSeller Receives: ${sellerReceives} ${currency}\n\nConfirm deal?`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Confirm Deal', 'CONFIRM_DEAL')],
+                [Markup.button.callback('❌ Cancel', 'CANCEL_DEAL')]
+            ])
+        );
+    }
+
+    // ===== Other text messages (deal chat) =====
+    const deals = getDeals();
+    const activeDeal = deals.find(
+        d => (d.buyer === ctx.from.id || users[d.seller] === ctx.from.id) &&
+             ['pending_seller','waiting_payment','paid','in_progress'].includes(d.status)
+    );
+
+    if (activeDeal) {
+        const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
+        if (!recipientId) return ctx.reply("The other party has not started the bot yet.");
+        if (!activeDeal.chat) activeDeal.chat = [];
+        activeDeal.chat.push({ from: ctx.from.id, message: msg });
+        saveDeals(deals);
+
+        try {
+            await ctx.telegram.sendMessage(recipientId, `💬 Message from ${ctx.from.first_name}: ${msg}`);
+            ctx.reply("Message sent ✅");
+        } catch (err) {
+            ctx.reply("Failed to send message. Other party may not have started the bot.");
+        }
+    }
+});
   // ===== Deal Creation Flow =====
   if (state && state.step) {
     const dealData = state.dealData;
@@ -497,16 +630,32 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
   const deal = deals.find(d => d.dealId === dealId);
   if (!deal) return ctx.reply("Deal not found.");
 
-  // Update deal status
-  deal.status = 'waiting_payment';
-  saveDeals(deals);
+// ===== Seller accepts deal & send buyer payment instructions =====
+deal.status = 'waiting_payment';
+saveDeals(deals);
 
-  await ctx.answerCbQuery("Deal accepted!");
-  await ctx.reply("You accepted the deal. Waiting for buyer payment...");
+await ctx.answerCbQuery("Deal accepted!");
+await ctx.reply("You accepted the deal. Waiting for buyer payment...");
 
-  const buyerId = deal.buyer;
-  const walletAddress = wallets(deal.currency, deal.dealId);
+const buyerId = deal.buyer;
 
+// If currency is USDT, ask buyer to pick network
+if (deal.currency === 'USDT') {
+  await ctx.telegram.sendMessage(
+    buyerId,
+    "Please select the network for USDT payment:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback('TRC20', `USDT_NETWORK_TRC20_${deal.dealId}`)],
+      [Markup.button.callback('ERC20', `USDT_NETWORK_ERC20_${deal.dealId}`)],
+      [Markup.button.callback('BEP20', `USDT_NETWORK_BEP20_${deal.dealId}`)],
+      [Markup.button.callback('SOLANA', `USDT_NETWORK_SOLANA_${deal.dealId}`)]
+    ])
+  );
+} else {
+const networkKey = Object.keys(wallets[deal.currency])[0];
+const walletAddress = wallets[deal.currency][networkKey];
+
+if (!walletAddress) return ctx.reply("⚠️ Wallet not configured for this currency/network.");
   try {
     await ctx.telegram.sendMessage(
       buyerId,
@@ -516,12 +665,42 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
       `Amount: ${deal.amount} ${deal.currency}\n` +
       `Escrow Fee: ${deal.fee} ${deal.currency}\n` +
       `Seller receives: ${deal.sellerReceives} ${deal.currency}\n\n` +
-      `Escrow Wallet:\n${walletAddress}\n\n` +
+      `${deal.currency} Wallet:\n${walletAddress}\n\n` +
       `After sending payment screenshot, click "Mark as Paid".\n` +
       `You have 30 minutes to complete payment.`
     );
   } catch (err) {
     console.log("Error sending payment instructions:", err);
+  }
+}
+
+// ===== Handle USDT network selection =====
+bot.action(/USDT_NETWORK_(.+)_(.+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const network = ctx.match[1]; // TRC20, ERC20, BEP20, SOLANA
+  const dealId = ctx.match[2];
+  const deals = getDeals();
+  const deal = deals.find(d => d.dealId === dealId);
+  if (!deal) return ctx.reply("Deal not found.");
+
+  const buyerId = deal.buyer;
+  const walletAddress = wallets('USDT', dealId, network);
+
+  try {
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `✅ USDT (${network}) Wallet Selected\n\n` +
+      `Send payment to the escrow wallet below.\n\n` +
+      `Deal ID: ${dealId}\n` +
+      `Amount: ${deal.amount} USDT\n` +
+      `Escrow Fee: ${deal.fee} USDT\n` +
+      `Seller receives: ${deal.sellerReceives} USDT\n\n` +
+      `Wallet Address:\n${walletAddress}\n\n` +
+      `After sending payment screenshot, click "Mark as Paid".\n` +
+      `You have 30 minutes to complete payment.`
+    );
+  } catch (err) {
+    console.log("Error sending USDT network wallet:", err);
   }
 
   // Start 30-min reminder
@@ -541,21 +720,6 @@ bot.action(/ACCEPT_(.+)/, async (ctx) => {
     }
   }, 30 * 60 * 1000);
 });
-
-// ===== REJECT DEAL =====
-bot.action(/REJECT_(.+)/, async (ctx) => {
-  const dealId = ctx.match[1];
-  const deals = getDeals();
-  const index = deals.findIndex(d => d.dealId === dealId);
-  if (index === -1) return ctx.reply("Deal not found.");
-  const deal = deals[index];
-  deals.splice(index, 1);
-  saveDeals(deals);
-  await ctx.answerCbQuery("Deal rejected.");
-  ctx.reply("You rejected the deal.");
-  try { await ctx.telegram.sendMessage(deal.buyer, `Seller rejected your deal (ID: ${dealId}).`); } catch {}
-});
-
 // ===== BUYER MARKS PAID =====
 bot.action(/PAID_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
@@ -571,7 +735,9 @@ bot.action(/PAID_(.+)/, async (ctx) => {
 
 // ===== ADMIN RELEASE =====
 bot.command('release', async (ctx) => {
-  if (ctx.from.id != process.env.ADMIN_ID) return;
+if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
+  return ctx.answerCbQuery("Not authorized");
+}
   const args = ctx.message.text.split(' ');
   const dealId = args[1];
   const deals = getDeals();
@@ -584,34 +750,112 @@ bot.command('release', async (ctx) => {
 
   try {
     const sellerId = users[deal.seller] || deal.seller;
+
+    // Notify both parties
     await ctx.telegram.sendMessage(deal.buyer, `🎉 Deal ${dealId} completed!`);
     await ctx.telegram.sendMessage(sellerId, `🎉 Deal ${dealId} completed! You received ${deal.sellerReceives} ${deal.currency}.`);
-  } catch (err) {}
-});
 
-// ===== MY DEALS =====
-bot.action('MY_DEALS', async (ctx) => {
-  await ctx.answerCbQuery();
-  const deals = getDeals();
-  const userDeals = deals.filter(d => d.buyer === ctx.from.id || users[d.seller] === ctx.from.id);
-  if (!userDeals.length) return ctx.reply("No deals found.");
+    // ===== Prompt both buyer and seller to leave a review =====
+    promptReview(deal.buyer, dealId, 'buyer');
+    promptReview(sellerId, dealId, 'seller');
 
-  for (const d of userDeals) {
-    const buttons = [];
-    if (ctx.from.id === d.buyer && d.status === 'waiting_payment') {
-      buttons.push([Markup.button.callback('💰 Mark as Paid', `PAID_${d.dealId}`)]);
-    }
-    buttons.push([Markup.button.callback('💬 Chat', `CHAT_${d.dealId}`)]);
-    if (d.files && d.files.length > 0) {
-      buttons.push(...fileButtons(d));
-    }
-
-    await ctx.reply(
-      `Deal ID: ${d.dealId}\nBuyer: ${d.buyer}\nSeller: ${d.seller}\nAmount: ${d.amount} ${d.currency}\nStatus: ${d.status}\nProject: ${d.description}`,
-      Markup.inlineKeyboard(buttons)
-    );
+  } catch (err) {
+    console.log("Error notifying parties on deal release:", err);
   }
 });
+
+// ===== Function to prompt review =====
+function promptReview(userId, dealId, role) {
+  // Ask rating first
+  bot.telegram.sendMessage(userId, `✅ Your deal (ID: ${dealId}) is complete! Please leave a ${role} review.`);
+
+  bot.telegram.sendMessage(userId, "Select a rating for this deal:", 
+    Markup.inlineKeyboard([
+      [Markup.button.callback('⭐ 1', `REVIEW_${dealId}_${role}_1`)],
+      [Markup.button.callback('⭐ 2', `REVIEW_${dealId}_${role}_2`)],
+      [Markup.button.callback('⭐ 3', `REVIEW_${dealId}_${role}_3`)],
+      [Markup.button.callback('⭐ 4', `REVIEW_${dealId}_${role}_4`)],
+      [Markup.button.callback('⭐ 5', `REVIEW_${dealId}_${role}_5`)]
+    ])
+  );
+}
+
+
+// ===== Handle review rating selection =====
+bot.action(/REVIEW_(.+)_(buyer|seller)_(\d)/, async (ctx) => {
+  const dealId = ctx.match[1];
+  const role = ctx.match[2]; // buyer or seller
+  const rating = parseInt(ctx.match[3]);
+
+  // Only allow the user who clicked to submit
+  if ((role === 'buyer' && ctx.from.id !== getDeals().find(d => d.dealId === dealId).buyer) ||
+      (role === 'seller' && ctx.from.id !== getDeals().find(d => d.dealId === dealId).seller)) {
+    return ctx.answerCbQuery("You cannot submit a review for the other party.");
+  }
+
+  await ctx.answerCbQuery(`You selected ⭐ ${rating}`);
+
+  await ctx.reply("Great! Now type your review text for this deal:");
+
+  const reviewListener = async (ctx2) => {
+    const reviewText = ctx2.message.text;
+    addReview(rating, reviewText, role); // Save review with role
+
+    await ctx2.reply("⭐ Thank you! Your review has been recorded.");
+
+    // Remove listener after use
+    bot.off('text', reviewListener);
+  };
+
+const userId = ctx.from.id;
+userStates[userId] = { step: 'awaitingReview', dealId, role, rating };
+});
+
+// ===== MY DEALS SYSTEM (NEW: Deal ID lookup) =====
+bot.command('mydeals', async (ctx) => {
+  await ctx.reply("📄 Please enter your Deal ID to view:");
+
+  // Set user state — main bot.on('text') will handle it
+  userStates[ctx.from.id] = { step: 'awaitingDealId' };
+});
+
+// ===== HANDLE MY DEALS INPUT =====
+if (state?.step === 'awaitingDealId') {
+  const dealId = msg.trim();
+  const deals = getDeals();
+  const deal = deals.find(d => d.dealId === dealId);
+
+  if (!deal) {
+    await ctx.reply("❌ Deal not found. Please check your Deal ID.");
+    delete userStates[ctx.from.id];
+    return;
+  }
+
+  if (ctx.from.id != deal.buyer && ctx.from.id != deal.seller) {
+    await ctx.reply("❌ You do not have access to this deal.");
+    delete userStates[ctx.from.id];
+    return;
+  }
+
+  const statusEmoji = deal.status === 'completed' ? '✅' : (deal.status === 'waiting_payment' ? '⏳' : '⚠️');
+
+  await ctx.reply(
+    `📄 Deal ID: ${deal.dealId}\n` +
+    `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
+    `Seller: ${deal.sellerUsername || deal.seller}\n` +
+    `Payment Status: ${statusEmoji} ${deal.status}\n` +
+    `Delivery Deadline: ${deal.deliveryDeadline || 'N/A'}\n` +
+    `Amount: ${deal.amount} ${deal.currency}`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('📞 Contact Support', 'HELP_SUBMIT')],
+      ...(ctx.from.id === deal.buyer && deal.status !== 'completed' ? [[Markup.button.callback('Mark as Paid', `PAID_${dealId}`)]] : []),
+      ...(ctx.from.id === deal.seller && deal.status === 'waiting_payment' ? [[Markup.button.callback('Request Extension', `EXTEND_${dealId}`)]] : [])
+    ])
+  );
+
+  delete userStates[ctx.from.id]; // clear the state
+  return;
+}
 
 // ===== HANDLE FILE BUTTON CLICK =====
 bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
