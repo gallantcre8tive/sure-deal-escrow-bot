@@ -805,43 +805,49 @@ bot.command('mydeals', async (ctx) => {
 });
 
 // ===== HANDLE MY DEALS INPUT =====
-if (state?.step === 'awaitingDealId') {
-  const dealId = msg.trim();
-  const deals = getDeals();
-  const deal = deals.find(d => d.dealId === dealId);
+bot.on('text', async (ctx) => {
+  const state = userStates[ctx.from.id];
+  const msg = ctx.message.text.trim();
 
-  if (!deal) {
-    await ctx.reply("❌ Deal not found. Please check your Deal ID.");
+  if (state?.step === 'awaitingDealId') {
+    const dealId = msg;
+    const deals = getDeals();
+    const deal = deals.find(d => d.dealId === dealId);
+
+    if (!deal) {
+      await ctx.reply("❌ Deal not found. Please check your Deal ID.");
+      delete userStates[ctx.from.id];
+      return;
+    }
+
+    if (ctx.from.id !== deal.buyer && ctx.from.id !== deal.seller) {
+      await ctx.reply("❌ You do not have access to this deal.");
+      delete userStates[ctx.from.id];
+      return;
+    }
+
+    const statusEmoji = deal.status === 'completed' ? '✅' : (deal.status === 'waiting_payment' ? '⏳' : '⚠️');
+
+    await ctx.reply(
+      `📄 Deal ID: ${deal.dealId}\n` +
+      `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
+      `Seller: ${deal.sellerUsername || deal.seller}\n` +
+      `Payment Status: ${statusEmoji} ${deal.status}\n` +
+      `Delivery Deadline: ${deal.deliveryDeadline || 'N/A'}\n` +
+      `Amount: ${deal.amount} ${deal.currency}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('📞 Contact Support', 'HELP_SUBMIT')],
+        ...(ctx.from.id === deal.buyer && deal.status !== 'completed' ? [[Markup.button.callback('Mark as Paid', `PAID_${dealId}`)]] : []),
+        ...(ctx.from.id === deal.seller && deal.status === 'waiting_payment' ? [[Markup.button.callback('Request Extension', `EXTEND_${dealId}`)]] : [])
+      ])
+    );
+
     delete userStates[ctx.from.id];
     return;
   }
 
-  if (ctx.from.id != deal.buyer && ctx.from.id != deal.seller) {
-    await ctx.reply("❌ You do not have access to this deal.");
-    delete userStates[ctx.from.id];
-    return;
-  }
-
-  const statusEmoji = deal.status === 'completed' ? '✅' :
-                      deal.status === 'waiting_payment' ? '⏳' : '⚠️';
-
-  await ctx.reply(
-    `📄 Deal ID: ${deal.dealId}\n` +
-    `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
-    `Seller: ${deal.sellerUsername || deal.seller}\n` +
-    `Payment Status: ${statusEmoji} ${deal.status}\n` +
-    `Delivery Deadline: ${deal.deliveryDeadline || 'N/A'}\n` +
-    `Amount: ${deal.amount} ${deal.currency}`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback('📞 Contact Support', 'HELP_SUBMIT')],
-      ...(ctx.from.id === deal.buyer && deal.status !== 'completed' ? [[Markup.button.callback('Mark as Paid', `PAID_${dealId}`)]] : []),
-      ...(ctx.from.id === deal.seller && deal.status === 'waiting_payment' ? [[Markup.button.callback('Request Extension', `EXTEND_${dealId}`)]] : [])
-    ])
-  );
-
-  delete userStates[ctx.from.id]; // clear the state
-  return;
-}
+  // ... other text handlers like help messages, reviews, deal creation
+});
 
 // ===== HANDLE FILE BUTTON CLICK =====
 bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
