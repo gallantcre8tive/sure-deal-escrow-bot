@@ -935,103 +935,197 @@ ctx.reply("Unsupported file type")
 // TEXT HANDLER (MASTER HANDLER)
 // =======================================
 
-bot.on("text", async(ctx)=>{
+bot.on("text", async (ctx) => {
 
 const state = userStates[ctx.from.id]
-
-if(!state) return
+if (!state) return
 
 const msg = ctx.message.text.trim()
 
+// =============================
+// CREATE DEAL FLOW
+// =============================
 
+// SELLER USERNAME
+if (state.step === "awaitingSeller") {
+
+  if (!msg.startsWith("@")) {
+    return ctx.reply("❌ Please enter a valid seller username starting with @")
+  }
+
+  state.dealData.seller = msg
+  state.step = "awaitingDescription"
+
+  await ctx.reply("📝 Enter the deal description:")
+  return
+}
+
+// DEAL DESCRIPTION
+if (state.step === "awaitingDescription") {
+
+  state.dealData.description = msg
+  state.step = "awaitingAmount"
+
+  await ctx.reply("💰 Enter the deal amount:")
+  return
+}
+
+// DEAL AMOUNT
+if (state.step === "awaitingAmount") {
+
+  const amount = parseFloat(msg)
+
+  if (isNaN(amount)) {
+    return ctx.reply("❌ Please enter a valid number.")
+  }
+
+  state.dealData.amount = amount
+  state.step = "awaitingDeliveryDays"
+
+  await ctx.reply("📦 Enter delivery time in days:")
+  return
+}
+
+// DELIVERY DAYS
+if (state.step === "awaitingDeliveryDays") {
+
+  const days = parseInt(msg)
+
+  if (isNaN(days)) {
+    return ctx.reply("❌ Enter a valid number of days.")
+  }
+
+  const dealId = generateDealId()
+
+  const deals = getDeals()
+
+  const fee = calculateFee(state.dealData.amount)
+
+  const newDeal = {
+
+    dealId: dealId,
+    buyer: ctx.from.id,
+    seller: state.dealData.seller,
+    description: state.dealData.description,
+    amount: state.dealData.amount,
+    currency: "USDT",
+    sellerReceives: state.dealData.amount - fee,
+    deliveryDays: days,
+    status: "waiting_payment",
+    createdAt: new Date().toISOString()
+
+  }
+
+  deals.push(newDeal)
+  saveDeals(deals)
+
+  await ctx.reply(
+
+`✅ Deal Created Successfully
+
+Deal ID: ${dealId}
+
+Seller: ${state.dealData.seller}
+Description: ${state.dealData.description}
+Amount: ${state.dealData.amount} USDT
+Delivery: ${days} days
+
+Select payment method below.`,
+
+Markup.inlineKeyboard([
+[Markup.button.callback("💰 Pay with USDT","PAY_USDT")]
+])
+
+)
+
+  delete userStates[ctx.from.id]
+  return
+}
+
+
+// =============================
 // HELP MESSAGE
+// =============================
 
-if(state.step === "awaitingHelpMessage"){
+if (state.step === "awaitingHelpMessage") {
 
-await ctx.telegram.sendMessage(
+  await ctx.telegram.sendMessage(
 
-ADMIN_ID,
+    ADMIN_ID,
 
-`Support request
+`📩 Support Request
 
-From: @${ctx.from.username}
+From: @${ctx.from.username || ctx.from.first_name}
 
 Message:
 ${msg}`
 
-)
+  )
 
-await ctx.reply("Message sent to support.")
-
-delete userStates[ctx.from.id]
-
-return
-
+  await ctx.reply("✅ Message sent to support.")
+  delete userStates[ctx.from.id]
+  return
 }
 
 
+// =============================
 // EXTENSION REASON
+// =============================
 
-if(state.step === "awaitingExtensionReason"){
+if (state.step === "awaitingExtensionReason") {
 
-const deals = getDeals()
+  const deals = getDeals()
+  const deal = deals.find(d => d.dealId === state.dealId)
 
-const deal = deals.find(d=>d.dealId===state.dealId)
+  if (!deal) {
+    delete userStates[ctx.from.id]
+    return ctx.reply("Deal not found.")
+  }
 
-await ctx.telegram.sendMessage(
+  await ctx.telegram.sendMessage(
 
-deal.buyer,
+    deal.buyer,
 
-`Seller requested delivery extension.
+`⏳ Seller requested delivery extension.
 
 Reason:
 ${msg}`,
 
 Markup.inlineKeyboard([
-
-[Markup.button.callback("Approve",`EXTENSION_APPROVE_${deal.dealId}`)],
-
-[Markup.button.callback("Decline",`EXTENSION_DECLINE_${deal.dealId}`)]
-
+[Markup.button.callback("✅ Approve",`EXTENSION_APPROVE_${deal.dealId}`)],
+[Markup.button.callback("❌ Decline",`EXTENSION_DECLINE_${deal.dealId}`)]
 ])
 
-)
+  )
 
-delete userStates[ctx.from.id]
-
-return
-
+  delete userStates[ctx.from.id]
+  return
 }
 
 
+// =============================
 // REVIEW MESSAGE
+// =============================
 
-if(state.step === "awaitingReview"){
+if (state.step === "awaitingReview") {
 
-addReview({
+  addReview({
 
-dealId:state.dealId,
+    dealId: state.dealId,
+    rating: state.rating,
+    text: msg,
+    userId: ctx.from.id,
+    role: state.role
 
-rating:state.rating,
+  })
 
-text:msg,
+  await ctx.reply("⭐ Review submitted. Thank you!")
 
-userId:ctx.from.id,
-
-role:state.role
-
-})
-
-await ctx.reply("Review submitted. Thank you!")
-
-delete userStates[ctx.from.id]
-
-return
-
+  delete userStates[ctx.from.id]
+  return
 }
 
 })
-
 
 // =======================================
 // RENDER DEPLOYMENT (WEBHOOK)
