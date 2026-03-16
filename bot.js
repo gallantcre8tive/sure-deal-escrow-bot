@@ -675,7 +675,7 @@ After sending payment screenshot, click below:`,
 
 
 // ===== HANDLE USDT NETWORK SELECTION =====
-bot.action(/USDT_NETWORK_(.+)_(.+)/, async (ctx) => {
+bot.action(/USDT_NETWORK_([A-Z0-9]+)_(DEAL-[a-zA-Z0-9]+)/, async (ctx) => {
 
   await ctx.answerCbQuery();
 
@@ -690,6 +690,10 @@ bot.action(/USDT_NETWORK_(.+)_(.+)/, async (ctx) => {
   const buyerId = deal.buyer;
   const walletAddress = wallets.USDT[network];
 
+  if (!walletAddress) {
+    return ctx.reply("⚠️ Wallet not configured for this network.");
+  }
+
   await ctx.telegram.sendMessage(
     buyerId,
     `✅ USDT (${network}) Wallet Selected
@@ -702,7 +706,7 @@ Seller receives: ${deal.sellerReceives} USDT
 Wallet Address:
 ${walletAddress}
 
-After payment click below:`,
+After sending payment, click below:`,
     Markup.inlineKeyboard([
       [Markup.button.callback("✅ Mark as Paid", `PAID_${dealId}`)]
     ])
