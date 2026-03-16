@@ -8,6 +8,7 @@ const path = require('path');
 const { getDeals, saveDeals } = require('./utils/storage');
 const generateDealId = require('./utils/generateDealId');
 const { calculateFee } = require('./services/feeService');
+const { wallets, generateWalletAddress } = require("./wallet");
 const { getAllReviews, addReview, getAverageRating, getTotalReviews } = require('./data/reviews');
 function getUserReviews(userId) {
   return getAllReviews().filter(r => r.userId === userId);
@@ -675,7 +676,7 @@ After sending payment screenshot, click below:`,
 
 
 // ===== HANDLE USDT NETWORK SELECTION =====
-bot.action(/USDT_NETWORK_([A-Z0-9]+)_(DEAL-[a-zA-Z0-9]+)/, async (ctx) => {
+bot.action(/USDT_NETWORK_(TRC20|ERC20|BEP20|SOLANA)_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery();
 
@@ -685,31 +686,46 @@ bot.action(/USDT_NETWORK_([A-Z0-9]+)_(DEAL-[a-zA-Z0-9]+)/, async (ctx) => {
   const deals = getDeals();
   const deal = deals.find(d => d.dealId === dealId);
 
-  if (!deal) return ctx.reply("Deal not found.");
+  if (!deal) {
+    return ctx.reply("Deal not found.");
+  }
+
+  let walletAddress;
+
+  try {
+
+    walletAddress = generateWalletAddress("USDT", dealId, network);
+
+  } catch (err) {
+
+    console.log("Wallet error:", err);
+    return ctx.reply("Wallet configuration error.");
+
+  }
 
   const buyerId = deal.buyer;
-  const walletAddress = wallets.USDT[network];
-
-  if (!walletAddress) {
-    return ctx.reply("⚠️ Wallet not configured for this network.");
-  }
 
   await ctx.telegram.sendMessage(
     buyerId,
-    `✅ USDT (${network}) Wallet Selected
+`✅ USDT (${network}) Escrow Wallet
 
 Deal ID: ${dealId}
+
 Amount: ${deal.amount} USDT
 Escrow Fee: ${deal.fee} USDT
-Seller receives: ${deal.sellerReceives} USDT
+Seller Receives: ${deal.sellerReceives} USDT
 
-Wallet Address:
-${walletAddress}
+Send payment to the address below:
 
-After sending payment, click below:`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("✅ Mark as Paid", `PAID_${dealId}`)]
-    ])
+\`${walletAddress}\`
+
+Tap the address to copy.`,
+    {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Mark as Paid", `PAID_${dealId}`)]
+      ])
+    }
   );
 
 });
