@@ -8,7 +8,7 @@ const path = require('path');
 const { getDeals, saveDeals } = require('./utils/storage');
 const generateDealId = require('./utils/generateDealId');
 const { calculateFee } = require('./services/feeService');
-const { wallets, generateWalletAddress } = require("./wallet");
+const { wallets, generateWalletAddress } = require('./config/wallets');
 const { getAllReviews, addReview, getAverageRating, getTotalReviews } = require('./data/reviews');
 function getUserReviews(userId) {
   return getAllReviews().filter(r => r.userId === userId);
