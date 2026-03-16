@@ -317,7 +317,6 @@ bot.action("PAY_USDT", async (ctx) => {
 
 });
 
-const wallets = require('./config/wallets');
 
 bot.action(/NET_USDT_(.+)/, async (ctx) => {
 
