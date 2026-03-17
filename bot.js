@@ -14,6 +14,9 @@ const { getAllReviews, addReview, getAverageRating, getTotalReviews } = require(
 function getUserReviews(userId) {
   return getAllReviews().filter(r => r.userId === userId);
 }
+if (!process.env.ADMIN_ID) {
+  console.warn("⚠️ ADMIN_ID is not set in environment variables");
+}
 
 // ===== Helper to create file buttons =====
 function fileButtons(deal) {
@@ -370,151 +373,140 @@ bot.on('text', async (ctx) => {
   const msg = ctx.message.text?.trim();
   if (!msg) return;
 
-  // ===== HANDLE HELP MESSAGES =====
-  if (state?.step === 'awaitingHelpMessage') {
-    const adminId = process.env.ADMIN_ID;
-    const fromUser = `@${ctx.from.username || ctx.from.first_name} (ID: ${ctx.from.id})`;
-    try {
-      await ctx.reply("✅ Your message has been sent to support. They will reply soon.");
-      await ctx.telegram.sendMessage(
-        adminId,
-        `📩 Help request from ${fromUser}\n\nMessage:\n${msg}`
-      );
-    } catch (err) {
-      console.error("Error forwarding help message:", err);
-      await ctx.reply("❌ Failed to send message to admin. Try again later.");
+  try {
+    // ===== 1️⃣ HANDLE HELP MESSAGES =====
+    if (state?.step === 'awaitingHelpMessage') {
+      const adminId = process.env.ADMIN_ID;
+      const fromUser = `@${ctx.from.username || ctx.from.first_name} (ID: ${ctx.from.id})`;
+
+      try {
+        await ctx.reply("✅ Your message has been sent to support. They will reply soon.");
+        await ctx.telegram.sendMessage(
+          adminId,
+          `📩 Help request from ${fromUser}\n\nMessage:\n${msg}`
+        );
+      } catch (err) {
+        console.error("Error forwarding help message:", err);
+        await ctx.reply("❌ Failed to send message to admin. Try again later.");
+      }
+
+      delete userStates[ctx.from.id];
+      return;
     }
-    delete userStates[ctx.from.id];
-    return;
-  }
 
-  // ===== HANDLE EXTENSION REASON =====
-  if (state?.step === 'awaitingExtensionReason') {
-    const reason = msg;
-    const deals = getDeals();
-    const deal = deals.find(d => d.dealId === state.dealId);
-    if (!deal) return ctx.reply("❌ Deal not found.");
+    // ===== 2️⃣ HANDLE EXTENSION REASON =====
+    if (state?.step === 'awaitingExtensionReason') {
+      const reason = msg;
+      const deals = getDeals();
+      const deal = deals.find(d => d.dealId === state.dealId);
+      if (!deal) return await ctx.reply("❌ Deal not found.");
 
-    deal.extensionRequested = {
-      by: ctx.from.id,
-      reason,
-      requestedAt: new Date().toISOString()
-    };
-    saveDeals(deals);
+      deal.extensionRequested = {
+        by: ctx.from.id,
+        reason,
+        requestedAt: new Date().toISOString()
+      };
+      saveDeals(deals);
 
-    const buyerId = deal.buyer;
-    const sellerUsername = ctx.from.username || ctx.from.first_name;
+      const buyerId = deal.buyer;
+      const sellerUsername = ctx.from.username || ctx.from.first_name;
 
-    try {
-      await ctx.telegram.sendMessage(
-        buyerId,
-        `⏳ Seller (${sellerUsername}) requested a delivery extension for Deal ${deal.dealId}.\n\nReason:\n${reason}\n\nDo you approve the extension?`,
+      try {
+        await ctx.telegram.sendMessage(
+          buyerId,
+          `⏳ Seller (${sellerUsername}) requested a delivery extension for Deal ${deal.dealId}.\n\nReason:\n${reason}\n\nDo you approve the extension?`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback("✅ Approve Extension", `EXTENSION_APPROVE_${deal.dealId}`)],
+            [Markup.button.callback("❌ Decline Extension", `EXTENSION_DECLINE_${deal.dealId}`)]
+          ])
+        );
+
+        await ctx.reply("✅ Your delivery extension request has been sent to the buyer.");
+      } catch (err) {
+        console.error("Error sending extension request:", err);
+        await ctx.reply("❌ Failed to send extension request. Try again later.");
+      }
+
+      delete userStates[ctx.from.id];
+      return;
+    }
+
+    // ===== 3️⃣ HANDLE REVIEWS =====
+    if (state?.step === 'awaitingReview') {
+      const deals = getDeals();
+      const deal = deals.find(d => d.dealId === state.dealId);
+      if (!deal) return await ctx.reply("❌ Deal not found.");
+
+      if (!deal.reviews) deal.reviews = [];
+      deal.reviews.push({
+        by: ctx.from.id,
+        role: state.role,
+        rating: state.rating,
+        text: msg,
+        createdAt: new Date().toISOString()
+      });
+      saveDeals(deals);
+
+      await ctx.reply("✅ Thank you! Your review has been submitted.");
+      delete userStates[ctx.from.id];
+      return;
+    }
+
+    // ===== 4️⃣ DEAL CREATION FLOW =====
+    if (state?.step === 'awaitingSeller') {
+      if (!msg.startsWith("@")) return await ctx.reply("❌ Please enter a valid username starting with @");
+
+      state.dealData.seller = msg;
+      state.step = 'awaitingAmount';
+      return await ctx.reply("💰 Enter the deal amount (numbers only).\nExample: 50");
+    }
+
+    if (state?.step === 'awaitingAmount') {
+      const amount = Number(msg);
+      if (isNaN(amount) || amount <= 0) return await ctx.reply("❌ Invalid amount. Enter a valid number.");
+
+      state.dealData.amount = amount;
+      state.dealData.currency = "USDT"; // default
+      state.step = 'awaitingDescription';
+      return await ctx.reply("📝 Enter the project description:");
+    }
+
+    if (state?.step === 'awaitingDescription') {
+      state.dealData.description = msg;
+      state.step = 'awaitingDeliveryTime';
+
+      return await ctx.reply(
+        "⏱ Select delivery time:",
         Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Approve Extension", `EXTENSION_APPROVE_${deal.dealId}`)],
-          [Markup.button.callback("❌ Decline Extension", `EXTENSION_DECLINE_${deal.dealId}`)]
+          [Markup.button.callback("1 Day", "TIME_1")],
+          [Markup.button.callback("2 Days", "TIME_2")],
+          [Markup.button.callback("3 Days", "TIME_3")],
+          [Markup.button.callback("5 Days", "TIME_5")],
+          [Markup.button.callback("7 Days", "TIME_7")],
+          [Markup.button.callback("Custom Time", "TIME_CUSTOM")]
         ])
       );
-
-      await ctx.reply("✅ Your delivery extension request has been sent to the buyer.");
-    } catch (err) {
-      console.error("Error sending extension request:", err);
-      await ctx.reply("❌ Failed to send extension request. Try again later.");
     }
 
-    delete userStates[ctx.from.id];
-    return;
-  }
-});
-
-  // ===== HANDLE REVIEWS =====
-if (state?.step === 'awaitingReview') {
-  try {
-    const reviewText = msg;
-    const deals = getDeals();
-    const deal = deals.find(d => d.dealId === state.dealId);
-    if (!deal) return ctx.reply("❌ Deal not found.");
-
-    if (!deal.reviews) deal.reviews = [];
-    deal.reviews.push({
-      by: ctx.from.id,
-      role: state.role,
-      rating: state.rating,
-      text: reviewText,
-      createdAt: new Date().toISOString()
-    });
-    saveDeals(deals);
-
-    async function handleReview(ctx) {
-    await ctx.reply("✅ Thank you! Your review has been submitted.");
-}
-    delete userStates[ctx.from.id];
-  } catch (err) {
-    console.error("Error submitting review:", err);
-    ctx.reply("❌ Failed to submit review. Try again later.");
-  }
-  return;
-}
-
-// ===== STEP 1 — SELLER USERNAME =====
-if (state?.step === 'awaitingSeller') {
-  if (!msg.startsWith("@")) return ctx.reply("❌ Please enter a valid username starting with @");
-
-  state.dealData.seller = msg;
-  state.step = 'awaitingAmount';
-  return ctx.reply("💰 Enter the deal amount (numbers only).\nExample: 50");
-}
-
-// ===== STEP 2 — AMOUNT =====
-if (state?.step === 'awaitingAmount') {
-  const amount = Number(msg);
-  if (isNaN(amount) || amount <= 0) return ctx.reply("❌ Invalid amount. Enter a valid number.");
-
-  state.dealData.amount = amount;
-  state.dealData.currency = "USDT"; // default
-  state.step = 'awaitingDescription';
-  return ctx.reply("📝 Enter the project description:");
-}
-
-// ===== STEP 3 — DESCRIPTION =====
-if (state?.step === 'awaitingDescription') {
-  state.dealData.description = msg;
-  state.step = 'awaitingDeliveryTime';
-
-  return ctx.reply(
-    "⏱ Select delivery time:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("1 Day", "TIME_1")],
-      [Markup.button.callback("2 Days", "TIME_2")],
-      [Markup.button.callback("3 Days", "TIME_3")],
-      [Markup.button.callback("5 Days", "TIME_5")],
-      [Markup.button.callback("7 Days", "TIME_7")],
-      [Markup.button.callback("Custom Time", "TIME_CUSTOM")]
-    ])
-  );
-}
-
-// ===== HANDLE MY DEALS LOOKUP =====
-if (state?.step === 'awaitingDealId') {
-  (async () => {
-    try {
+    // ===== 5️⃣ HANDLE MY DEALS LOOKUP =====
+    if (state?.step === 'awaitingDealId') {
       const dealId = msg;
       const deals = getDeals();
       const deal = deals.find(d => d.dealId === dealId);
 
       if (!deal) {
         delete userStates[ctx.from.id];
-        return ctx.reply("❌ Deal not found.");
+        return await ctx.reply("❌ Deal not found.");
       }
 
       if (ctx.from.id !== deal.buyer && ctx.from.id !== (users[deal.seller] || 0)) {
         delete userStates[ctx.from.id];
-        return ctx.reply("❌ You are not part of this deal.");
+        return await ctx.reply("❌ You are not part of this deal.");
       }
 
       const statusEmoji = deal.status === 'completed' ? '✅' :
                           deal.status === 'waiting_payment' ? '⏳' : '⚠️';
 
-      // ✅ Safe await inside async IIFE
       await ctx.reply(
         `📄 Deal ID: ${deal.dealId}\n` +
         `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
@@ -523,28 +515,21 @@ if (state?.step === 'awaitingDealId') {
         `Amount: ${deal.amount} ${deal.currency}`
       );
 
-    } catch (err) {
-      console.error("Error in my deal lookup:", err);
-      ctx.reply("❌ Failed to fetch deal. Try again later.");
-    } finally {
       delete userStates[ctx.from.id];
+      return;
     }
-  })();
-  
-  return;
-}
 
-// ===== CHAT FLOW =====
-try {
-  const deals = getDeals();
-  const activeDeal = deals.find(
-    d => (d.buyer === ctx.from.id || (users[d.seller] && users[d.seller] === ctx.from.id)) &&
-         ['pending_seller', 'waiting_payment', 'paid', 'in_progress'].includes(d.status)
-  );
+    // ===== 6️⃣ CHAT FLOW =====
+    const deals = getDeals();
+    const activeDeal = deals.find(
+      d => (d.buyer === ctx.from.id || (users[d.seller] && users[d.seller] === ctx.from.id)) &&
+           ['pending_seller', 'waiting_payment', 'paid', 'in_progress'].includes(d.status)
+    );
 
-  if (activeDeal) {
+    if (!activeDeal) return; // no active deal, ignore
+
     const recipientId = ctx.from.id === activeDeal.buyer ? users[activeDeal.seller] : activeDeal.buyer;
-    if (!recipientId) return ctx.reply("⚠️ The other party has not started the bot yet.");
+    if (!recipientId) return await ctx.reply("⚠️ The other party has not started the bot yet.");
 
     if (!activeDeal.chat) activeDeal.chat = [];
     activeDeal.chat.push({ from: ctx.from.id, message: msg });
@@ -552,27 +537,31 @@ try {
 
     try {
       await ctx.telegram.sendMessage(recipientId, `💬 Message from ${ctx.from.first_name}: ${msg}`);
-      ctx.reply("✅ Message sent");
-    } catch {
-      ctx.reply("❌ Failed to send message. Other party may not have started the bot.");
+      await ctx.reply("✅ Message sent");
+    } catch (err) {
+      console.error("Error sending chat message:", err);
+      await ctx.reply("❌ Failed to send message. Other party may not have started the bot.");
     }
+
+  } catch (err) {
+    console.error("Error in merged text handler:", err);
+    // catch-all for deployment safety
+    await ctx.reply("❌ An unexpected error occurred. Try again.");
   }
-} catch (err) {
-  console.error("Error in chat flow:", err);
-}
+});
 
 // ===== DELIVERY TIME HANDLER =====
 bot.action(/TIME_(.+)/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
     const state = userStates[ctx.from.id];
-    if (!state || state.step !== "awaitingDeliveryTime") return;
+    if (!state || !state.dealData || state.step !== "awaitingDeliveryTime") return;
 
-    let selected = ctx.match[1];
+    const selected = ctx.match[1];
 
     if (selected === "CUSTOM") {
       state.step = "awaitingCustomTime";
-      return ctx.reply("✍️ Enter custom delivery time (e.g., 10 Days):");
+      return await ctx.reply("✍️ Enter custom delivery time (e.g., 10 Days):");
     }
 
     state.dealData.deliveryTime = `${selected} Day${selected > 1 ? "s" : ""}`;
@@ -594,12 +583,12 @@ bot.action(/TIME_(.+)/, async (ctx) => {
         ])
       }
     );
+
   } catch (err) {
     console.error("Error in delivery time handler:", err);
-    ctx.reply("❌ Failed to process delivery time. Try again.");
+    await ctx.reply("❌ Failed to process delivery time. Try again.");
   }
 });
-
 // ===== CONFIRM / CANCEL DEAL =====
 bot.action('CONFIRM_DEAL', async (ctx) => {
   try {
@@ -611,19 +600,20 @@ bot.action('CONFIRM_DEAL', async (ctx) => {
     const dealId = generateDealId();
     const deals = getDeals();
 
-    const newDeal = {
-      dealId,
-      buyer: ctx.from.id,
-      seller: dealData.seller,
-      description: dealData.description,
-      amount: dealData.amount,
-      fee: dealData.fee,
-      sellerReceives: dealData.sellerReceives,
-      currency: dealData.currency,
-      status: 'pending_seller',
-      chat: [],
-      files: []
-    };
+const newDeal = {
+  dealId,
+  buyer: ctx.from.id,
+  seller: dealData.seller,
+  description: dealData.description,
+  amount: dealData.amount,
+  fee: dealData.fee,
+  sellerReceives: dealData.sellerReceives,
+  currency: dealData.currency,
+  deliveryTime: dealData.deliveryTime, // ✅ ADD THIS
+  status: 'pending_seller',
+  chat: [],
+  files: []
+};
 
     deals.push(newDeal);
     saveDeals(deals);
@@ -1064,7 +1054,7 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
 
   try {
     // Send the file to recipient
-    switch (file.type) {
+    switch (ctx.updateType) {
       case 'document':
         await ctx.telegram.sendDocument(recipientId, file.file_id);
         break;
@@ -1106,7 +1096,13 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
     ctx.reply("❌ Failed to send file.");
   }
 });
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+});
 
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION:', err);
+});
 
 // ===== RENDER DEPLOYMENT =====
 const PORT = process.env.PORT || 3000;
