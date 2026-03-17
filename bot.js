@@ -495,36 +495,42 @@ if (state?.step === 'awaitingDescription') {
 
 // ===== HANDLE MY DEALS LOOKUP =====
 if (state?.step === 'awaitingDealId') {
-  try {
-    const dealId = msg;
-    const deals = getDeals();
-    const deal = deals.find(d => d.dealId === dealId);
-    if (!deal) {
+  (async () => {
+    try {
+      const dealId = msg;
+      const deals = getDeals();
+      const deal = deals.find(d => d.dealId === dealId);
+
+      if (!deal) {
+        delete userStates[ctx.from.id];
+        return ctx.reply("❌ Deal not found.");
+      }
+
+      if (ctx.from.id !== deal.buyer && ctx.from.id !== (users[deal.seller] || 0)) {
+        delete userStates[ctx.from.id];
+        return ctx.reply("❌ You are not part of this deal.");
+      }
+
+      const statusEmoji = deal.status === 'completed' ? '✅' :
+                          deal.status === 'waiting_payment' ? '⏳' : '⚠️';
+
+      // ✅ Safe await inside async IIFE
+      await ctx.reply(
+        `📄 Deal ID: ${deal.dealId}\n` +
+        `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
+        `Seller: ${deal.sellerUsername || deal.seller}\n` +
+        `Status: ${statusEmoji} ${deal.status}\n` +
+        `Amount: ${deal.amount} ${deal.currency}`
+      );
+
+    } catch (err) {
+      console.error("Error in my deal lookup:", err);
+      ctx.reply("❌ Failed to fetch deal. Try again later.");
+    } finally {
       delete userStates[ctx.from.id];
-      return ctx.reply("❌ Deal not found.");
     }
-    if (ctx.from.id !== deal.buyer && ctx.from.id !== (users[deal.seller] || 0)) {
-      delete userStates[ctx.from.id];
-      return ctx.reply("❌ You are not part of this deal.");
-    }
-
-    const statusEmoji = deal.status === 'completed' ? '✅' :
-                        deal.status === 'waiting_payment' ? '⏳' : '⚠️';
-
-    await ctx.reply(
-      `📄 Deal ID: ${deal.dealId}\n` +
-      `Buyer: ${deal.buyerUsername || deal.buyer}\n` +
-      `Seller: ${deal.sellerUsername || deal.seller}\n` +
-      `Status: ${statusEmoji} ${deal.status}\n` +
-      `Amount: ${deal.amount} ${deal.currency}`
-    );
-
-  } catch (err) {
-    console.error("Error in my deal lookup:", err);
-    ctx.reply("❌ Failed to fetch deal. Try again later.");
-  } finally {
-    delete userStates[ctx.from.id];
-  }
+  })();
+  
   return;
 }
 
