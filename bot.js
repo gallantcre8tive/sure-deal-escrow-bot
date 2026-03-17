@@ -444,7 +444,9 @@ if (state?.step === 'awaitingReview') {
     });
     saveDeals(deals);
 
+    async function handleReview(ctx) {
     await ctx.reply("✅ Thank you! Your review has been submitted.");
+}
     delete userStates[ctx.from.id];
   } catch (err) {
     console.error("Error submitting review:", err);
