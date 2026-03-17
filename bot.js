@@ -554,20 +554,30 @@ bot.on('text', async (ctx) => {
 bot.action(/TIME_(.+)/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
+
     const state = userStates[ctx.from.id];
-    if (!state || !state.dealData || state.step !== "awaitingDeliveryTime") return;
+    if (!state || !state.dealData || state.step !== "awaitingDeliveryTime") {
+      return;
+    }
 
-    const selected = ctx.match[1];
+    const selectedRaw = ctx.match[1];
 
-    if (selected === "CUSTOM") {
+    if (selectedRaw === "CUSTOM") {
       state.step = "awaitingCustomTime";
       return await ctx.reply("✍️ Enter custom delivery time (e.g., 10 Days):");
+    }
+
+    const selected = parseInt(selectedRaw);
+
+    if (isNaN(selected)) {
+      return await ctx.reply("❌ Invalid delivery time selected.");
     }
 
     state.dealData.deliveryTime = `${selected} Day${selected > 1 ? "s" : ""}`;
     state.step = "confirmDeal";
 
     const d = state.dealData;
+
     await ctx.reply(
       `✅ *Deal Summary*\n\n` +
       `👤 Seller: ${d.seller}\n` +
