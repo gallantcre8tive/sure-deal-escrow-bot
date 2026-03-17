@@ -452,41 +452,73 @@ bot.on('text', async (ctx) => {
       return;
     }
 
-    // ===== 4️⃣ DEAL CREATION FLOW =====
-    if (state?.step === 'awaitingSeller') {
-      if (!msg.startsWith("@")) return await ctx.reply("❌ Please enter a valid username starting with @");
+// ===== 4️⃣ DEAL CREATION FLOW =====
+if (state?.step === 'awaitingSeller') {
+  if (!msg.startsWith("@")) return await ctx.reply("❌ Please enter a valid username starting with @");
 
-      state.dealData.seller = msg;
-      state.step = 'awaitingAmount';
-      return await ctx.reply("💰 Enter the deal amount (numbers only).\nExample: 50");
+  state.dealData.seller = msg;
+  state.step = 'awaitingAmount';
+  return await ctx.reply("💰 Enter the deal amount (numbers only).\nExample: 50");
+}
+
+if (state?.step === 'awaitingAmount') {
+  const amount = Number(msg);
+  if (isNaN(amount) || amount <= 0) return await ctx.reply("❌ Invalid amount. Enter a valid number.");
+
+  state.dealData.amount = amount;
+  state.dealData.currency = "USDT"; // default
+  state.step = 'awaitingDescription';
+  return await ctx.reply("📝 Enter the project description:");
+}
+
+if (state?.step === 'awaitingDescription') {
+  state.dealData.description = msg;
+  state.step = 'awaitingDeliveryTime';
+
+  return await ctx.reply(
+    "⏱ Select delivery time:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("1 Day", "TIME_1")],
+      [Markup.button.callback("2 Days", "TIME_2")],
+      [Markup.button.callback("3 Days", "TIME_3")],
+      [Markup.button.callback("5 Days", "TIME_5")],
+      [Markup.button.callback("7 Days", "TIME_7")],
+      [Markup.button.callback("Custom Time", "TIME_CUSTOM")]
+    ])
+  );
+}
+
+
+// ✅ ADD THIS RIGHT AFTER (VERY IMPORTANT)
+
+if (state?.step === 'awaitingCustomTime') {
+  const days = parseInt(msg);
+
+  if (isNaN(days) || days <= 0) {
+    return await ctx.reply("❌ Please enter a valid number of days.");
+  }
+
+  state.dealData.deliveryTime = `${days} Day${days > 1 ? "s" : ""}`;
+  state.step = "confirmDeal";
+
+  const d = state.dealData;
+
+  return await ctx.reply(
+    `✅ *Deal Summary*\n\n` +
+    `👤 Seller: ${d.seller}\n` +
+    `💰 Amount: ${d.amount} ${d.currency}\n` +
+    `📝 Description: ${d.description}\n` +
+    `⏱ Delivery: ${d.deliveryTime}\n\n` +
+    `Confirm this deal?`,
+    {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Confirm Deal", "CONFIRM_DEAL")],
+        [Markup.button.callback("❌ Cancel", "CANCEL_DEAL")]
+      ])
     }
-
-    if (state?.step === 'awaitingAmount') {
-      const amount = Number(msg);
-      if (isNaN(amount) || amount <= 0) return await ctx.reply("❌ Invalid amount. Enter a valid number.");
-
-      state.dealData.amount = amount;
-      state.dealData.currency = "USDT"; // default
-      state.step = 'awaitingDescription';
-      return await ctx.reply("📝 Enter the project description:");
-    }
-
-    if (state?.step === 'awaitingDescription') {
-      state.dealData.description = msg;
-      state.step = 'awaitingDeliveryTime';
-
-      return await ctx.reply(
-        "⏱ Select delivery time:",
-        Markup.inlineKeyboard([
-          [Markup.button.callback("1 Day", "TIME_1")],
-          [Markup.button.callback("2 Days", "TIME_2")],
-          [Markup.button.callback("3 Days", "TIME_3")],
-          [Markup.button.callback("5 Days", "TIME_5")],
-          [Markup.button.callback("7 Days", "TIME_7")],
-          [Markup.button.callback("Custom Time", "TIME_CUSTOM")]
-        ])
-      );
-    }
+  );
+}
 
     // ===== 5️⃣ HANDLE MY DEALS LOOKUP =====
     if (state?.step === 'awaitingDealId') {
