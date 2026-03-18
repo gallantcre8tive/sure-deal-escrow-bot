@@ -290,10 +290,11 @@ if (!adminId || ctx.from.id.toString() !== adminId) {
 
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
-const adminId = process.env.ADMIN_ID?.toString();
-if (!adminId || ctx.from.id.toString() !== adminId) {
-  return ctx.answerCbQuery("Not authorized");
-}
+  try {  // <-- You were missing this
+    const adminId = process.env.ADMIN_ID?.toString();
+    if (!adminId || ctx.from.id.toString() !== adminId) {
+      return ctx.answerCbQuery("Not authorized");
+    }
 
     const dealId = ctx.match[1];
     const deals = getDeals();
