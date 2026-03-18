@@ -51,7 +51,9 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 // ===== START COMMAND / MAIN MENU =====
 bot.start(async (ctx) => {
   try {
-    const username = ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name;
+const username = ctx.from.username
+  ? '@' + ctx.from.username.toLowerCase()
+  : ctx.from.first_name;
     if (!users[username]) {
       users[username] = ctx.from.id;
       saveUsers();
@@ -264,7 +266,6 @@ await ctx.telegram.sendPhoto(
   }
 });
 
-// ===== ADMIN CONFIRM PAYMENT =====
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
@@ -525,7 +526,7 @@ bot.on('text', async (ctx) => {
 if (state?.step === 'awaitingSeller') {
   if (!msg.startsWith("@")) return await ctx.reply("❌ Please enter a valid username starting with @");
 
-  state.dealData.seller = msg;
+state.dealData.seller = msg.toLowerCase();
   state.step = 'awaitingAmount';
   return await ctx.reply("💰 Enter the deal amount (numbers only).\nExample: 50");
 }
@@ -922,8 +923,7 @@ bot.action(/PAID_(.+)/, async (ctx) => {
     await ctx.reply("⏳ Payment submitted. Waiting for admin confirmation.");
 
     // 5️⃣ Notify the seller safely (NO start work button here)
-    const sellerId = users[deal.seller];
-
+const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) {
       return ctx.reply("⚠️ Seller has not started the bot yet. Ask them to /start first.");
     }
@@ -948,8 +948,8 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     if (!deal) return ctx.reply("❌ Deal not found.");
     if (deal.status !== 'paid') return ctx.reply("⚠️ Payment not confirmed yet.");
 
-    const sellerId = users[deal.seller];
-    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
+const sellerId = users[deal.seller?.toLowerCase?.()];   
+ if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
 
     const buyerId = deal.buyer;
 
@@ -1047,7 +1047,7 @@ bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
     }
 
     // ✅ Safe seller ID (FIXED)
-    const sellerId = users[deal.seller];
+    const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) {
       return ctx.reply("⚠️ Seller has not started the bot.");
     }
@@ -1092,7 +1092,7 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
     }
 
     // ✅ Safe seller ID (FIXED)
-    const sellerId = users[deal.seller];
+    const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) {
       return ctx.reply("⚠️ Seller has not started the bot.");
     }
@@ -1176,7 +1176,7 @@ bot.command('release', async (ctx) => {
     if (!deal) return ctx.reply("❌ Deal not found.");
 
     // ✅ Safe seller ID (FIXED)
-    const sellerId = users[deal.seller];
+    const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) {
       return ctx.reply("⚠️ Seller has not started the bot.");
     }
