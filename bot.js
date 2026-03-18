@@ -51,14 +51,20 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 // ===== START COMMAND / MAIN MENU =====
 bot.start(async (ctx) => {
   try {
-const username = ctx.from.username
-  ? '@' + ctx.from.username.toLowerCase()
-  : ctx.from.first_name;
-    if (!users[username]) {
-      users[username] = ctx.from.id;
-      saveUsers();
-      console.log(`Registered new user: ${username} (${ctx.from.id})`);
+    const users = getUsers(); // ✅ ALWAYS reload fresh
+
+    if (!ctx.from.username) {
+      return ctx.reply("⚠️ Please set a Telegram username in your Telegram settings first.");
     }
+
+    const username = '@' + ctx.from.username.toLowerCase();
+    const userId = ctx.from.id;
+
+    // ✅ Save or update user
+    users[username] = userId;
+    saveUsers(users); // ✅ PASS users correctly
+
+    console.log(`Registered/Updated user: ${username} (${userId})`);
 
     await ctx.reply(
       `Welcome to Sure Deal Escrow, ${ctx.from.first_name}!\n\nChoose an option:`,
@@ -69,8 +75,10 @@ const username = ctx.from.username
         [Markup.button.callback('❓ Help', 'HELP')]
       ])
     );
+
   } catch (err) {
     console.error('Error in /start:', err);
+    ctx.reply("❌ Failed to start bot.");
   }
 });
 
