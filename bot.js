@@ -265,6 +265,7 @@ await ctx.telegram.sendPhoto(
 });
 
 // ===== ADMIN CONFIRM PAYMENT =====
+// ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
     const adminId = Number(process.env.ADMIN_ID);
@@ -283,19 +284,20 @@ bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Deal is not awaiting payment.");
     }
 
+    const buyerId = deal.buyer;
+
+    // ✅ FIXED: safe seller resolution (NO fallback to avoid wrong user)
+    const sellerKey = deal.seller?.toLowerCase?.() || deal.seller;
+    const sellerId = users[sellerKey];
+
+    if (!sellerId) {
+      console.error("❌ Seller ID missing for:", deal.seller);
+      return ctx.reply("⚠️ Seller has not started the bot. Cannot proceed.");
+    }
+
     // ✅ Mark as paid
     deal.status = 'paid';
     saveDeals(deals);
-
-    const buyerId = deal.buyer;
-
-    // ✅ Ensure sellerId is always correct (THIS fixes your main issue)
-const sellerId = users[deal.seller];
-
-if (!sellerId) {
-  console.error("Seller ID missing for deal:", dealId);
-  return ctx.reply("⚠️ Seller has not started the bot. Cannot send Start Work.");
-}
 
     // ✅ Notify buyer
     await ctx.telegram.sendMessage(
@@ -303,7 +305,7 @@ if (!sellerId) {
       `💰 Payment for Deal ${dealId} has been confirmed by escrow.\n\nThe seller will begin work shortly.`
     );
 
-    // ✅ Notify seller ONLY (not admin)
+    // ✅ Notify seller ONLY (FIXED ISSUE)
     await ctx.telegram.sendMessage(
       sellerId,
       `💰 Payment for Deal ${dealId} has been confirmed.\n\nYou can now start work.`,
@@ -326,13 +328,14 @@ if (!sellerId) {
   }
 });
 
+
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
   try {
-const adminId = Number(process.env.ADMIN_ID);
-if (!adminId || ctx.from.id !== adminId) {
-  return ctx.answerCbQuery("❌ Not authorized");
-}
+    const adminId = Number(process.env.ADMIN_ID);
+    if (!adminId || ctx.from.id !== adminId) {
+      return ctx.answerCbQuery("❌ Not authorized");
+    }
 
     const dealId = ctx.match[1];
     const deals = getDeals();
@@ -342,24 +345,28 @@ if (!adminId || ctx.from.id !== adminId) {
 
     const deal = deals[dealIndex];
     const buyerId = deal.buyer;
-  const sellerId = users[deal.seller];
 
-if (!sellerId) {
-  return ctx.reply("⚠️ Seller has not started the bot. Ask them to /start first.");
-}
+    // ✅ FIXED: safe seller resolution
+    const sellerKey = deal.seller?.toLowerCase?.() || deal.seller;
+    const sellerId = users[sellerKey];
 
-    // Notify buyer and seller
+    // ✅ Notify buyer (always)
     await bot.telegram.sendMessage(
       buyerId,
-      `⚠️ Payment for Deal ${dealId} was rejected by admin. Please provide a valid payment screenshot or retry.`
+      `⚠️ Payment for Deal ${dealId} was rejected by admin.\n\nPlease provide a valid payment screenshot or retry.`
     );
 
-    await bot.telegram.sendMessage(
-      sellerId,
-      `❌ Payment for Deal ${dealId} was rejected by admin. Deal is canceled.`
-    );
+    // ✅ Notify seller ONLY if exists (prevents crash)
+    if (sellerId) {
+      await bot.telegram.sendMessage(
+        sellerId,
+        `❌ Payment for Deal ${dealId} was rejected by admin.\nDeal has been canceled.`
+      );
+    } else {
+      console.warn("Seller not found during reject:", deal.seller);
+    }
 
-    // Remove the deal from the list
+    // ✅ Remove deal
     deals.splice(dealIndex, 1);
     saveDeals(deals);
 
@@ -370,6 +377,7 @@ if (!sellerId) {
     ctx.reply("❌ Failed to reject payment. Please try again.");
   }
 });
+
 // ===== PAYMENT METHOD SELECTION =====
 bot.action("SELECT_PAYMENT", async (ctx) => {
   try {
