@@ -1031,9 +1031,10 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
 
 // ===== ADMIN RELEASE =====
 bot.command('release', async (ctx) => {
-if (ctx.chat.id.toString() !== process.env.ADMIN_ID.toString()) {
-  return ctx.answerCbQuery("Not authorized");
-}
+  try {
+    if (ctx.chat.id.toString() !== process.env.ADMIN_ID.toString()) {
+      return ctx.reply("❌ Not authorized");
+    }
 
     const args = ctx.message.text.split(' ');
     const dealId = args[1];
@@ -1056,11 +1057,10 @@ if (ctx.chat.id.toString() !== process.env.ADMIN_ID.toString()) {
       `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
     );
 
-    ctx.reply("✅ Funds released successfully.");
-
+    await ctx.reply("✅ Funds released successfully.");
   } catch (err) {
     console.error("Error in ADMIN RELEASE:", err);
-    ctx.reply("❌ Failed to release funds.");
+    await ctx.reply("❌ Failed to release funds.");
   }
 });
 
