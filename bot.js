@@ -257,10 +257,10 @@ await ctx.telegram.sendPhoto(
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
-    const adminId = process.env.ADMIN_ID?.toString();
-    if (!adminId || ctx.from.id.toString() !== adminId) {
-      return ctx.answerCbQuery("❌ Not authorized");
-    }
+const adminId = Number(process.env.ADMIN_ID);
+if (!adminId || ctx.from.id !== adminId) {
+  return ctx.answerCbQuery("❌ Not authorized");
+}
 
     const dealId = ctx.match[1];
     const deals = getDeals();
@@ -301,10 +301,10 @@ bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
   try {
-    const adminId = process.env.ADMIN_ID?.toString();
-    if (!adminId || ctx.from.id.toString() !== adminId) {
-      return ctx.answerCbQuery("❌ Not authorized");
-    }
+const adminId = Number(process.env.ADMIN_ID);
+if (!adminId || ctx.from.id !== adminId) {
+  return ctx.answerCbQuery("❌ Not authorized");
+}
 
     const dealId = ctx.match[1];
     const deals = getDeals();
