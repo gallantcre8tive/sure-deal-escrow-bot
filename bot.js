@@ -51,21 +51,15 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 // ===== START COMMAND / MAIN MENU =====
 bot.start(async (ctx) => {
   try {
-    // Make sure getUsers and saveUsers are async-safe
-    const users = await getUsers(); // if getUsers is async, use await
+    const username = ctx.from.username
+      ? '@' + ctx.from.username.toLowerCase()
+      : ctx.from.first_name;
 
-    if (!ctx.from.username) {
-      return await ctx.reply("⚠️ Please set a Telegram username in your Telegram settings first.");
+    if (!users[username]) {
+      users[username] = ctx.from.id;
+      saveUsers();
+      console.log(`Registered new user: ${username} (${ctx.from.id})`);
     }
-
-    const username = '@' + ctx.from.username.toLowerCase();
-    const userId = ctx.from.id;
-
-    // Save or update user
-    users[username] = userId;
-    await saveUsers(users); // if saveUsers is async, use await
-
-    console.log(`Registered/Updated user: ${username} (${userId})`);
 
     await ctx.reply(
       `Welcome to Sure Deal Escrow, ${ctx.from.first_name}!\n\nChoose an option:`,
@@ -79,7 +73,6 @@ bot.start(async (ctx) => {
 
   } catch (err) {
     console.error('Error in /start:', err);
-    await ctx.reply("❌ Failed to start bot."); // always await
   }
 });
 
