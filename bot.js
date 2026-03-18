@@ -839,41 +839,40 @@ bot.action(/PAID_(.+)/, async (ctx) => {
     const deal = deals.find(d => d.dealId === dealId);
     if (!deal) return ctx.reply("❌ Deal not found.");
 
-    // Disable the inline button immediately to prevent spam clicks
+    // Disable the inline button immediately
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 
-    // Enforce payment screenshot submission
+    // 1️⃣ Ensure screenshot is uploaded first
     if (!deal.screenshotSubmitted) {
       return ctx.reply("⚠️ You must upload a payment screenshot before marking as paid.");
     }
 
-    // Prevent double marking as paid
+    // 2️⃣ Prevent double marking
     if (deal.status === 'paid') {
-      return ctx.reply("ℹ️ Payment has already been marked as paid.");
+      return ctx.reply("ℹ️ Payment already confirmed by admin.");
     }
 
-    // Mark deal as paid
-if (deal.status === 'paid') {
-  return ctx.reply("ℹ️ Payment already confirmed by admin.");
-}
+    // 3️⃣ Mark deal as paid
+    deal.status = 'paid';
+    saveDeals(deals);
 
-return ctx.reply("⏳ Payment submitted. Waiting for admin confirmation.");
+    // 4️⃣ Notify the buyer
+    await ctx.reply("⏳ Payment submitted. Waiting for admin confirmation.");
 
-    // Get seller ID safely
+    // 5️⃣ Notify the seller safely
     const sellerId = users[deal.seller] || deal.seller;
-    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot yet.");
+    if (sellerId) {
+      await ctx.telegram.sendMessage(
+        sellerId,
+        `💰 Payment received for Deal ${deal.dealId}. Admin will verify the screenshot before work starts.`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🟢 Start Work", `START_WORK_${dealId}`)]
+        ])
+      );
+    } else {
+      await ctx.reply("⚠️ Seller has not started the bot yet. Ask them to /start first.");
+    }
 
-    // Notify the seller
-    await ctx.telegram.sendMessage(
-      sellerId,
-      `💰 Payment received for Deal ${deal.dealId}.`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🟢 Start Work", `START_WORK_${dealId}`)]
-      ])
-    );
-
-    // Confirm to the user
-    await ctx.reply("✅ Payment marked as sent. Admin will verify if needed.");
   } catch (err) {
     console.error("Error in PAID handler:", err);
     ctx.reply("❌ Failed to mark payment. Try again.");
