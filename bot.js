@@ -277,36 +277,48 @@ bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
     const deal = deals.find(d => d.dealId === dealId);
 
     if (!deal) return ctx.reply("❌ Deal not found.");
-    
-    // ✅ Check for the correct status
-    if (deal.status !== 'waiting_payment') 
+
+    // ✅ Ensure correct status
+    if (deal.status !== 'waiting_payment') {
       return ctx.reply("⚠️ Deal is not awaiting payment.");
+    }
 
     // ✅ Mark as paid
     deal.status = 'paid';
     saveDeals(deals);
 
     const buyerId = deal.buyer;
-    const sellerId = users[deal.seller] || deal.seller;
 
-    // Notify buyer
-    await bot.telegram.sendMessage(
+    // ✅ Ensure sellerId is always correct (THIS fixes your main issue)
+const sellerId = users[deal.seller];
+
+if (!sellerId) {
+  console.error("Seller ID missing for deal:", dealId);
+  return ctx.reply("⚠️ Seller has not started the bot. Cannot send Start Work.");
+}
+
+    // ✅ Notify buyer
+    await ctx.telegram.sendMessage(
       buyerId,
-      `💰 Payment for Deal ${dealId} has been confirmed by admin. The seller can now start work.`
+      `💰 Payment for Deal ${dealId} has been confirmed by escrow.\n\nThe seller will begin work shortly.`
     );
 
-    // Notify seller with Start Work button
-    await bot.telegram.sendMessage(
+    // ✅ Notify seller ONLY (not admin)
+    await ctx.telegram.sendMessage(
       sellerId,
-      `💰 Payment for Deal ${dealId} has been confirmed by admin. You may now start work.`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🚀 Start Work", `START_WORK_${dealId}`)]
-      ])
+      `💰 Payment for Deal ${dealId} has been confirmed.\n\nYou can now start work.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🚀 Start Work", callback_data: `START_WORK_${dealId}` }]
+          ]
+        }
+      }
     );
 
-    // Admin feedback
-    await ctx.answerCbQuery("✅ Payment confirmed successfully");
-    await ctx.reply(`✅ Deal ${dealId} marked as PAID. Buyer & Seller have been notified.`);
+    // ✅ Admin feedback
+    await ctx.answerCbQuery("✅ Payment confirmed");
+    await ctx.reply(`✅ Deal ${dealId} marked as PAID.\nBuyer & Seller notified.`);
 
   } catch (err) {
     console.error("Error in ADMIN_CONFIRM:", err);
@@ -330,7 +342,11 @@ if (!adminId || ctx.from.id !== adminId) {
 
     const deal = deals[dealIndex];
     const buyerId = deal.buyer;
-    const sellerId = users[deal.seller] || deal.seller;
+  const sellerId = users[deal.seller];
+
+if (!sellerId) {
+  return ctx.reply("⚠️ Seller has not started the bot. Ask them to /start first.");
+}
 
     // Notify buyer and seller
     await bot.telegram.sendMessage(
@@ -890,26 +906,24 @@ bot.action(/PAID_(.+)/, async (ctx) => {
       return ctx.reply("ℹ️ Payment already confirmed by admin.");
     }
 
-    // 3️⃣ Mark deal as paid
-    deal.status = 'paid';
+    // 3️⃣ Mark deal as awaiting admin confirmation (IMPORTANT FIX)
+    deal.status = 'waiting_payment';
     saveDeals(deals);
 
     // 4️⃣ Notify the buyer
     await ctx.reply("⏳ Payment submitted. Waiting for admin confirmation.");
 
-    // 5️⃣ Notify the seller safely
-    const sellerId = users[deal.seller] || deal.seller;
-    if (sellerId) {
-      await ctx.telegram.sendMessage(
-        sellerId,
-        `💰 Payment received for Deal ${deal.dealId}. Admin will verify the screenshot before work starts.`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback("🟢 Start Work", `START_WORK_${dealId}`)]
-        ])
-      );
-    } else {
-      await ctx.reply("⚠️ Seller has not started the bot yet. Ask them to /start first.");
+    // 5️⃣ Notify the seller safely (NO start work button here)
+    const sellerId = users[deal.seller];
+
+    if (!sellerId) {
+      return ctx.reply("⚠️ Seller has not started the bot yet. Ask them to /start first.");
     }
+
+    await ctx.telegram.sendMessage(
+      sellerId,
+      `💰 Buyer marked payment for Deal ${deal.dealId}.\n\nWaiting for admin confirmation before work starts.`
+    );
 
   } catch (err) {
     console.error("Error in PAID handler:", err);
@@ -926,20 +940,24 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     if (!deal) return ctx.reply("❌ Deal not found.");
     if (deal.status !== 'paid') return ctx.reply("⚠️ Payment not confirmed yet.");
 
+    const sellerId = users[deal.seller];
+    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
+
+    const buyerId = deal.buyer;
+
     // Mark deal as in-progress
     deal.status = 'in_progress';
     saveDeals(deals);
 
     await ctx.answerCbQuery();
 
-    const buyerId = deal.buyer;
-    const sellerId = users[deal.seller] || deal.seller;
-
-    // Notify buyer and seller
+    // Notify buyer
     await bot.telegram.sendMessage(
       buyerId,
       `🟢 Good news! Your seller has started work on Deal ${dealId}.\n⏱ Delivery countdown has started.`
     );
+
+    // Notify seller
     await bot.telegram.sendMessage(
       sellerId,
       "Need more time or ready to deliver?",
@@ -949,36 +967,54 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
       ])
     );
 
-    // ===== START DELIVERY COUNTDOWN WITH REMINDERS =====
+    // ===== DELIVERY COUNTDOWN TIMERS =====
     if (deal.deliveryTime) {
-      const deliveryDays = parseInt(deal.deliveryTime.trim());
+      const deliveryDays = parseInt(deal.deliveryTime.toString().trim());
       if (!isNaN(deliveryDays) && deliveryDays > 0) {
         const deliveryMs = deliveryDays * 24 * 60 * 60 * 1000;
 
+        // Clear existing timers (safe clean)
         if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
+        if (paymentTimers[`${dealId}_24h`]) clearTimeout(paymentTimers[`${dealId}_24h`]);
+        if (paymentTimers[`${dealId}_12h`]) clearTimeout(paymentTimers[`${dealId}_12h`]);
 
         // 24h and 12h reminders
-        const reminder24h = deliveryMs - 24 * 60 * 60 * 1000;
-        const reminder12h = deliveryMs - 12 * 60 * 60 * 1000;
+        const reminder24h = deliveryMs - (24 * 60 * 60 * 1000);
+        const reminder12h = deliveryMs - (12 * 60 * 60 * 1000);
 
         if (reminder24h > 0) {
           paymentTimers[`${dealId}_24h`] = setTimeout(async () => {
-            await bot.telegram.sendMessage(buyerId, `⚠️ 24 hours left for Deal ${dealId} delivery!`);
-            await bot.telegram.sendMessage(sellerId, `⚠️ 24 hours left to deliver Deal ${dealId}.`);
+            try {
+              await bot.telegram.sendMessage(buyerId, `⚠️ 24 hours left for Deal ${dealId} delivery!`);
+              await bot.telegram.sendMessage(sellerId, `⚠️ 24 hours left to deliver Deal ${dealId}.`);
+            } catch (e) {
+              console.error("24h reminder error:", e);
+            }
           }, reminder24h);
         }
 
         if (reminder12h > 0) {
           paymentTimers[`${dealId}_12h`] = setTimeout(async () => {
-            await bot.telegram.sendMessage(buyerId, `⚠️ 12 hours left for Deal ${dealId} delivery!`);
-            await bot.telegram.sendMessage(sellerId, `⚠️ 12 hours left to deliver Deal ${dealId}.`);
+            try {
+              await bot.telegram.sendMessage(buyerId, `⚠️ 12 hours left for Deal ${dealId} delivery!`);
+              await bot.telegram.sendMessage(sellerId, `⚠️ 12 hours left to deliver Deal ${dealId}.`);
+            } catch (e) {
+              console.error("12h reminder error:", e);
+            }
           }, reminder12h);
         }
 
         // Final deadline
         paymentTimers[dealId] = setTimeout(async () => {
-          await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
-          await bot.telegram.sendMessage(sellerId, `⚠️ Delivery time for Deal ${dealId} is over! Please deliver immediately or request admin help.`);
+          try {
+            await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
+            await bot.telegram.sendMessage(
+              sellerId,
+              `⚠️ Delivery time for Deal ${dealId} is over! Please deliver immediately or request admin help.`
+            );
+          } catch (e) {
+            console.error("Final timer error:", e);
+          }
         }, deliveryMs);
       } else {
         console.warn(`Invalid deliveryTime for Deal ${dealId}: "${deal.deliveryTime}"`);
@@ -990,7 +1026,6 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     ctx.reply("❌ Failed to start work. Please try again.");
   }
 });
-
 // ===== SELLER DELIVERS WORK =====
 bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
   try {
@@ -1003,12 +1038,18 @@ bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Work has not started yet.");
     }
 
+    // ✅ Safe seller ID (FIXED)
+    const sellerId = users[deal.seller];
+    if (!sellerId) {
+      return ctx.reply("⚠️ Seller has not started the bot.");
+    }
+
+    const buyerId = deal.buyer;
+
     deal.status = 'delivered';
     saveDeals(deals);
 
-    const buyerId = deal.buyer;
-    const sellerId = users[deal.seller] || deal.seller;
-
+    // Notify buyer
     await bot.telegram.sendMessage(
       buyerId,
       `📦 Work has been delivered for Deal ${dealId}.`,
@@ -1018,6 +1059,7 @@ bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
       ])
     );
 
+    // Notify seller
     await bot.telegram.sendMessage(
       sellerId,
       `✅ You marked the work as delivered for Deal ${dealId}. Waiting for buyer approval.`
@@ -1041,20 +1083,36 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Work has not been delivered yet.");
     }
 
+    // ✅ Safe seller ID (FIXED)
+    const sellerId = users[deal.seller];
+    if (!sellerId) {
+      return ctx.reply("⚠️ Seller has not started the bot.");
+    }
+
     deal.status = 'completed';
     saveDeals(deals);
 
-    const sellerId = users[deal.seller] || deal.seller;
+    const buyerId = deal.buyer;
 
-    await ctx.telegram.sendMessage(deal.buyer, `🎉 Deal ${dealId} completed!`);
+    // Notify buyer
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `🎉 Deal ${dealId} completed!`
+    );
+
+    // Notify seller
     await ctx.telegram.sendMessage(
       sellerId,
       `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
     );
 
-    // Request reviews
-    promptReview(deal.buyer, dealId, 'buyer');
-    promptReview(sellerId, dealId, 'seller');
+    // ✅ Safe review prompts (won’t crash if one fails)
+    try {
+      promptReview(buyerId, dealId, 'buyer');
+      promptReview(sellerId, dealId, 'seller');
+    } catch (e) {
+      console.error("Review prompt error:", e);
+    }
 
   } catch (err) {
     console.error("Error in APPROVE:", err);
@@ -1094,7 +1152,8 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
 // ===== ADMIN RELEASE =====
 bot.command('release', async (ctx) => {
   try {
-    if (ctx.chat.id.toString() !== process.env.ADMIN_ID.toString()) {
+    const adminId = Number(process.env.ADMIN_ID);
+    if (!adminId || ctx.from.id !== adminId) {
       return ctx.reply("❌ Not authorized");
     }
 
@@ -1108,18 +1167,31 @@ bot.command('release', async (ctx) => {
 
     if (!deal) return ctx.reply("❌ Deal not found.");
 
+    // ✅ Safe seller ID (FIXED)
+    const sellerId = users[deal.seller];
+    if (!sellerId) {
+      return ctx.reply("⚠️ Seller has not started the bot.");
+    }
+
+    const buyerId = deal.buyer;
+
     deal.status = 'completed';
     saveDeals(deals);
 
-    const sellerId = users[deal.seller] || deal.seller;
+    // Notify buyer
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `🎉 Deal ${dealId} completed!`
+    );
 
-    await ctx.telegram.sendMessage(deal.buyer, `🎉 Deal ${dealId} completed!`);
+    // Notify seller
     await ctx.telegram.sendMessage(
       sellerId,
       `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
     );
 
     await ctx.reply("✅ Funds released successfully.");
+
   } catch (err) {
     console.error("Error in ADMIN RELEASE:", err);
     await ctx.reply("❌ Failed to release funds.");
