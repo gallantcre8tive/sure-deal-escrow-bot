@@ -192,10 +192,17 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
 
       // Notify admin
       const adminId = process.env.ADMIN_ID;
-      await ctx.telegram.sendMessage(
-        adminId,
-        `📥 Payment screenshot received for Deal ${activeDeal.dealId}. Please verify.`
-      );
+await ctx.telegram.sendPhoto(
+  adminId,
+  file.file_id,
+  {
+    caption: `📥 Payment Screenshot\n\nDeal ID: ${activeDeal.dealId}\nUser: ${ctx.from.first_name}`,
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Confirm", `ADMIN_CONFIRM_${activeDeal.dealId}`)],
+      [Markup.button.callback("❌ Reject", `ADMIN_REJECT_${activeDeal.dealId}`)]
+    ])
+  }
+);
 
       return ctx.reply("✅ Screenshot received. Waiting for admin verification.");
     }
@@ -217,7 +224,7 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
       : activeDeal.buyer;
 
     if (recipientId) {
-      switch (file.type) {
+      switch (ctx.updateType) {
         case 'document':
           await ctx.telegram.sendDocument(recipientId, file.file_id);
           break;
@@ -250,10 +257,10 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
-    if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
-      return ctx.answerCbQuery("Not authorized");
-    }
-
+const adminId = process.env.ADMIN_ID?.toString();
+if (!adminId || ctx.from.id.toString() !== adminId) {
+  return ctx.answerCbQuery("Not authorized");
+}
     const dealId = ctx.match[1];
     const deals = getDeals();
     const deal = deals.find(d => d.dealId === dealId);
@@ -283,10 +290,10 @@ bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
 
 // ===== ADMIN REJECT PAYMENT =====
 bot.action(/ADMIN_REJECT_(.+)/, async (ctx) => {
-  try {
-    if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
-      return ctx.answerCbQuery("Not authorized");
-    }
+const adminId = process.env.ADMIN_ID?.toString();
+if (!adminId || ctx.from.id.toString() !== adminId) {
+  return ctx.answerCbQuery("Not authorized");
+}
 
     const dealId = ctx.match[1];
     const deals = getDeals();
@@ -463,10 +470,18 @@ if (state?.step === 'awaitingSeller') {
 
 if (state?.step === 'awaitingAmount') {
   const amount = Number(msg);
-  if (isNaN(amount) || amount <= 0) return await ctx.reply("❌ Invalid amount. Enter a valid number.");
+  if (isNaN(amount) || amount <= 0) {
+    return await ctx.reply("❌ Invalid amount. Enter a valid number.");
+  }
 
   state.dealData.amount = amount;
-  state.dealData.currency = "USDT"; // default
+  state.dealData.currency = "USDT";
+
+  // ✅ ADD THIS PART
+  const { fee, sellerReceives } = calculateFee(amount);
+  state.dealData.fee = fee;
+  state.dealData.sellerReceives = sellerReceives;
+
   state.step = 'awaitingDescription';
   return await ctx.reply("📝 Enter the project description:");
 }
@@ -838,8 +853,11 @@ bot.action(/PAID_(.+)/, async (ctx) => {
     }
 
     // Mark deal as paid
-    deal.status = 'paid';
-    saveDeals(deals);
+if (deal.status === 'paid') {
+  return ctx.reply("ℹ️ Payment already confirmed by admin.");
+}
+
+return ctx.reply("⏳ Payment submitted. Waiting for admin confirmation.");
 
     // Get seller ID safely
     const sellerId = users[deal.seller] || deal.seller;
@@ -1013,10 +1031,9 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
 
 // ===== ADMIN RELEASE =====
 bot.command('release', async (ctx) => {
-  try {
-    if (ctx.from.id !== Number(process.env.ADMIN_ID)) {
-      return ctx.reply("❌ Not authorized.");
-    }
+if (ctx.chat.id.toString() !== process.env.ADMIN_ID.toString()) {
+  return ctx.answerCbQuery("Not authorized");
+}
 
     const args = ctx.message.text.split(' ');
     const dealId = args[1];
@@ -1096,42 +1113,27 @@ bot.action(/FILE_(.+)_(\d+)/, async (ctx) => {
 
   try {
     // Send the file to recipient
-    switch (ctx.updateType) {
-      case 'document':
-        await ctx.telegram.sendDocument(recipientId, file.file_id);
-        break;
-      case 'photo':
-        await ctx.telegram.sendPhoto(recipientId, file.file_id);
-        break;
-      case 'video':
-        await ctx.telegram.sendVideo(recipientId, file.file_id);
-        break;
-      case 'audio':
-        await ctx.telegram.sendAudio(recipientId, file.file_id);
-        break;
-      case 'voice':
-        await ctx.telegram.sendVoice(recipientId, file.file_id);
-        break;
-      default:
-        return ctx.reply("Unsupported file type.");
-    }
+switch (ctx.updateType) {
+  case 'document':
+    await ctx.telegram.sendDocument(recipientId, file.file_id);
+    break;
+  case 'photo':
+    await ctx.telegram.sendPhoto(recipientId, file.file_id);
+    break;
+  case 'video':
+    await ctx.telegram.sendVideo(recipientId, file.file_id);
+    break;
+  case 'audio':
+    await ctx.telegram.sendAudio(recipientId, file.file_id);
+    break;
+  case 'voice':
+    await ctx.telegram.sendVoice(recipientId, file.file_id);
+    break;
+  default:
+    return ctx.reply("Unsupported file type.");
+}
 
-    // Attach screenshot to deal if status is waiting_payment
-    if (deal.status === "waiting_payment" && ctx.from.id === deal.buyer) {
-      deal.screenshotSubmitted = true;
-      saveDeals(deals);
-
-      // Notify admin for verification
-      const adminId = process.env.ADMIN_ID;
-      await ctx.telegram.sendMessage(
-        adminId,
-        `📥 Payment screenshot received for Deal ${deal.dealId}. Please verify.`
-      );
-
-      await ctx.reply("✅ Screenshot received. Waiting for admin verification.");
-    } else {
-      ctx.reply("✅ File sent.");
-    }
+await ctx.reply("✅ File sent.");
 
   } catch (err) {
     console.error("FILE_SEND_ERROR:", err);
