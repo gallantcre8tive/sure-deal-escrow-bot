@@ -191,12 +191,22 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
       saveDeals(deals);
 
       // Notify admin
-      const adminId = process.env.ADMIN_ID;
+const adminId = Number(process.env.ADMIN_ID);        // your personal ID
+const adminGroupId = Number(process.env.ADMIN_GROUP_ID);  // group ID
+
+// Send the screenshot to the group first for visibility
+await ctx.telegram.sendPhoto(
+  adminGroupId,
+  file.file_id,
+  { caption: `📥 Payment Screenshot\nDeal ID: ${activeDeal.dealId}\nUser: ${ctx.from.first_name}` }
+);
+
+// Send the admin buttons only to YOU
 await ctx.telegram.sendPhoto(
   adminId,
   file.file_id,
   {
-    caption: `📥 Payment Screenshot\n\nDeal ID: ${activeDeal.dealId}\nUser: ${ctx.from.first_name}`,
+    caption: `📥 Payment Screenshot\nDeal ID: ${activeDeal.dealId}\nUser: ${ctx.from.first_name}`,
     ...Markup.inlineKeyboard([
       [Markup.button.callback("✅ Confirm", `ADMIN_CONFIRM_${activeDeal.dealId}`)],
       [Markup.button.callback("❌ Reject", `ADMIN_REJECT_${activeDeal.dealId}`)]
@@ -257,31 +267,35 @@ await ctx.telegram.sendPhoto(
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
-const adminId = Number(process.env.ADMIN_ID);
-if (!adminId || ctx.from.id !== adminId) {
-  return ctx.answerCbQuery("❌ Not authorized");
-}
+    const adminId = Number(process.env.ADMIN_ID);
+    if (!adminId || ctx.from.id !== adminId) {
+      return ctx.answerCbQuery("❌ Not authorized");
+    }
 
     const dealId = ctx.match[1];
     const deals = getDeals();
     const deal = deals.find(d => d.dealId === dealId);
 
     if (!deal) return ctx.reply("❌ Deal not found.");
-    if (deal.status !== 'pending') return ctx.reply("⚠️ Deal is not awaiting payment.");
+    
+    // ✅ Check for the correct status
+    if (deal.status !== 'waiting_payment') 
+      return ctx.reply("⚠️ Deal is not awaiting payment.");
 
-    // Mark as paid
+    // ✅ Mark as paid
     deal.status = 'paid';
     saveDeals(deals);
 
     const buyerId = deal.buyer;
     const sellerId = users[deal.seller] || deal.seller;
 
-    // Notify buyer and seller once
+    // Notify buyer
     await bot.telegram.sendMessage(
       buyerId,
       `💰 Payment for Deal ${dealId} has been confirmed by admin. The seller can now start work.`
     );
 
+    // Notify seller with Start Work button
     await bot.telegram.sendMessage(
       sellerId,
       `💰 Payment for Deal ${dealId} has been confirmed by admin. You may now start work.`,
@@ -290,7 +304,9 @@ if (!adminId || ctx.from.id !== adminId) {
       ])
     );
 
+    // Admin feedback
     await ctx.answerCbQuery("✅ Payment confirmed successfully");
+    await ctx.reply(`✅ Deal ${dealId} marked as PAID. Buyer & Seller have been notified.`);
 
   } catch (err) {
     console.error("Error in ADMIN_CONFIRM:", err);
