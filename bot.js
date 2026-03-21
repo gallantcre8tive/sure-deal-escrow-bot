@@ -950,8 +950,8 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     if (!deal) return ctx.reply("❌ Deal not found.");
     if (deal.status !== 'paid') return ctx.reply("⚠️ Payment not confirmed yet.");
 
-const sellerId = users[deal.seller?.toLowerCase?.()];   
- if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
+    const sellerId = users[deal.seller?.toLowerCase?.()];
+    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
 
     const buyerId = deal.buyer;
 
@@ -967,28 +967,37 @@ const sellerId = users[deal.seller?.toLowerCase?.()];
       `🟢 Good news! Your seller has started work on Deal ${dealId}.\n⏱ Delivery countdown has started.`
     );
 
-    // Notify seller
-    await bot.telegram.sendMessage(
-      sellerId,
-      "Need more time or ready to deliver?",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("⏳ Request Extension", `EXTEND_${dealId}`)],
-        [Markup.button.callback("📦 Deliver Work", `DELIVER_WORK_${dealId}`)]
-      ])
-    );
-
-    // ===== DELIVERY COUNTDOWN TIMERS =====
+    // ===== DELIVERY COUNTDOWN + LIVE TIMER =====
     if (deal.deliveryTime) {
       const deliveryDays = parseInt(deal.deliveryTime.toString().trim());
+
       if (!isNaN(deliveryDays) && deliveryDays > 0) {
         const deliveryMs = deliveryDays * 24 * 60 * 60 * 1000;
 
-        // Clear existing timers (safe clean)
+        // Set deadline
+        deal.deliveryDeadline = Date.now() + deliveryMs;
+        saveDeals(deals);
+
+        // ===== SEND INITIAL COUNTDOWN MESSAGE =====
+        const countdownMsg = await bot.telegram.sendMessage(
+          sellerId,
+          `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(deliveryMs)}\n\nDeal ID: ${dealId}`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback("⏳ Request Extension", `EXTEND_${dealId}`)],
+            [Markup.button.callback("📦 Deliver Work", `DELIVER_WORK_${dealId}`)]
+          ])
+        );
+
+        deal.countdownMessageId = countdownMsg.message_id;
+        saveDeals(deals);
+
+        // ===== CLEAR OLD TIMERS =====
         if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
         if (paymentTimers[`${dealId}_24h`]) clearTimeout(paymentTimers[`${dealId}_24h`]);
         if (paymentTimers[`${dealId}_12h`]) clearTimeout(paymentTimers[`${dealId}_12h`]);
+        if (paymentTimers[`${dealId}_countdown`]) clearInterval(paymentTimers[`${dealId}_countdown`]);
 
-        // 24h and 12h reminders
+        // ===== REMINDERS =====
         const reminder24h = deliveryMs - (24 * 60 * 60 * 1000);
         const reminder12h = deliveryMs - (12 * 60 * 60 * 1000);
 
@@ -1014,18 +1023,74 @@ const sellerId = users[deal.seller?.toLowerCase?.()];
           }, reminder12h);
         }
 
-        // Final deadline
-        paymentTimers[dealId] = setTimeout(async () => {
+        // ===== LIVE COUNTDOWN UPDATE =====
+        paymentTimers[`${dealId}_countdown`] = setInterval(async () => {
           try {
-            await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
-            await bot.telegram.sendMessage(
-              sellerId,
-              `⚠️ Delivery time for Deal ${dealId} is over! Please deliver immediately or request admin help.`
-            );
-          } catch (e) {
-            console.error("Final timer error:", e);
+            const updatedDeals = getDeals();
+            const currentDeal = updatedDeals.find(d => d.dealId === dealId);
+
+            if (!currentDeal || currentDeal.status !== 'in_progress') {
+              clearInterval(paymentTimers[`${dealId}_countdown`]);
+              return;
+            }
+
+            const timeLeft = currentDeal.deliveryDeadline - Date.now();
+
+            if (timeLeft <= 0) {
+              clearInterval(paymentTimers[`${dealId}_countdown`]);
+
+              try {
+                await bot.telegram.editMessageText(
+                  sellerId,
+                  currentDeal.countdownMessageId,
+                  null,
+                  `⚠️ Delivery time is over!\n\nDeal ID: ${dealId}`,
+                  {
+                    reply_markup: {
+                      inline_keyboard: [
+                        [{ text: "📦 Deliver Now", callback_data: `DELIVER_WORK_${dealId}` }]
+                      ]
+                    }
+                  }
+                );
+              } catch (e) {
+                console.error("Edit message error:", e);
+              }
+
+              // Final notifications
+              await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
+              await bot.telegram.sendMessage(
+                sellerId,
+                `⚠️ Delivery time is over! Please deliver immediately.`
+              );
+
+              return;
+            }
+
+            try {
+              await bot.telegram.editMessageText(
+                sellerId,
+                currentDeal.countdownMessageId,
+                null,
+                `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(timeLeft)}\n\nDeal ID: ${dealId}`,
+                {
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: "⏳ Request Extension", callback_data: `EXTEND_${dealId}` }],
+                      [{ text: "📦 Deliver Work", callback_data: `DELIVER_WORK_${dealId}` }]
+                    ]
+                  }
+                }
+              );
+            } catch (e) {
+              console.error("Countdown edit error:", e);
+            }
+
+          } catch (err) {
+            console.error("Countdown update error:", err);
           }
-        }, deliveryMs);
+        }, 5 * 60 * 1000); // every 5 minutes
+
       } else {
         console.warn(`Invalid deliveryTime for Deal ${dealId}: "${deal.deliveryTime}"`);
       }
@@ -1036,10 +1101,11 @@ const sellerId = users[deal.seller?.toLowerCase?.()];
     ctx.reply("❌ Failed to start work. Please try again.");
   }
 });
-// ===== SELLER DELIVERS WORK =====
+// ===== SELLER DELIVERS WORK (STEP 1: ASK FOR FILE) =====
 bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
   try {
     const dealId = ctx.match[1];
+
     const deals = getDeals();
     const deal = deals.find(d => d.dealId === dealId);
 
@@ -1048,38 +1114,91 @@ bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Work has not started yet.");
     }
 
-    // ✅ Safe seller ID (FIXED)
-    const sellerId = users[deal.seller?.toLowerCase?.()];
-    if (!sellerId) {
-      return ctx.reply("⚠️ Seller has not started the bot.");
-    }
+    // Save state so next file = delivery
+    userStates[ctx.from.id] = {
+      step: "awaitingDeliveryFile",
+      dealId
+    };
 
-    const buyerId = deal.buyer;
-
-    deal.status = 'delivered';
-    saveDeals(deals);
-
-    // Notify buyer
-    await bot.telegram.sendMessage(
-      buyerId,
-      `📦 Work has been delivered for Deal ${dealId}.`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Approve Delivery", `APPROVE_${dealId}`)],
-        [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
-      ])
-    );
-
-    // Notify seller
-    await bot.telegram.sendMessage(
-      sellerId,
-      `✅ You marked the work as delivered for Deal ${dealId}. Waiting for buyer approval.`
-    );
+    await ctx.answerCbQuery();
+    await ctx.reply("📤 Please upload the work file (image, video, pdf, zip, etc).");
 
   } catch (err) {
     console.error("Error in DELIVER_WORK:", err);
-    ctx.reply("❌ Failed to deliver work.");
+    ctx.reply("❌ Failed to start delivery.");
   }
 });
+
+
+// ===== HANDLE DELIVERY FILE UPLOAD =====
+bot.on(['document','photo','video','audio','voice'], async (ctx) => {
+  try {
+    const state = userStates[ctx.from.id];
+
+    // ✅ ONLY handle delivery upload here
+    if (state?.step !== "awaitingDeliveryFile") return;
+
+    const dealId = state.dealId;
+    const deals = getDeals();
+    const deal = deals.find(d => d.dealId === dealId);
+
+    if (!deal) {
+      delete userStates[ctx.from.id];
+      return ctx.reply("❌ Deal not found.");
+    }
+
+    // Get file
+    const file = ctx.message.document ||
+                 ctx.message.photo?.[ctx.message.photo.length - 1] ||
+                 ctx.message.video ||
+                 ctx.message.audio ||
+                 ctx.message.voice;
+
+    if (!file) return ctx.reply("⚠️ Invalid file.");
+
+    const buyerId = deal.buyer;
+
+    // ===== SEND FILE TO BUYER WITH BUTTONS =====
+    const buttons = Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Approve Delivery", `APPROVE_${dealId}`)],
+      [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
+    ]);
+
+    switch (true) {
+      case !!ctx.message.document:
+        await ctx.telegram.sendDocument(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
+        break;
+      case !!ctx.message.photo:
+        await ctx.telegram.sendPhoto(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
+        break;
+      case !!ctx.message.video:
+        await ctx.telegram.sendVideo(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
+        break;
+      case !!ctx.message.audio:
+        await ctx.telegram.sendAudio(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
+        break;
+      case !!ctx.message.voice:
+        await ctx.telegram.sendVoice(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
+        break;
+      default:
+        return ctx.reply("⚠️ Unsupported file type.");
+    }
+
+    // Update deal AFTER sending file
+    deal.status = "delivered";
+    saveDeals(deals);
+
+    // Notify seller
+    await ctx.reply("✅ Work delivered successfully. Waiting for buyer approval.");
+
+    delete userStates[ctx.from.id];
+
+  } catch (err) {
+    console.error("Error handling delivery file:", err);
+    ctx.reply("❌ Failed to send delivery file.");
+  }
+});
+
 
 // ===== BUYER APPROVES DELIVERY =====
 bot.action(/APPROVE_(.+)/, async (ctx) => {
@@ -1093,7 +1212,6 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Work has not been delivered yet.");
     }
 
-    // ✅ Safe seller ID (FIXED)
     const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) {
       return ctx.reply("⚠️ Seller has not started the bot.");
@@ -1104,19 +1222,12 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
 
     const buyerId = deal.buyer;
 
-    // Notify buyer
-    await ctx.telegram.sendMessage(
-      buyerId,
-      `🎉 Deal ${dealId} completed!`
-    );
-
-    // Notify seller
+    await ctx.telegram.sendMessage(buyerId, `🎉 Deal ${dealId} completed!`);
     await ctx.telegram.sendMessage(
       sellerId,
       `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
     );
 
-    // ✅ Safe review prompts (won’t crash if one fails)
     try {
       promptReview(buyerId, dealId, 'buyer');
       promptReview(sellerId, dealId, 'seller');
@@ -1157,7 +1268,6 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
     ctx.reply("❌ Failed to open dispute.");
   }
 });
-
 
 // ===== ADMIN RELEASE =====
 bot.command('release', async (ctx) => {
