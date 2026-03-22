@@ -796,34 +796,74 @@ if (state?.step === 'awaitingCustomTime') {
   }
 });
 
-// ===== DELIVERY TIME HANDLER =====
+// ===== DELIVERY TIME HANDLER (STABLE PRO VERSION) =====
 bot.action(/TIME_(.+)/, async (ctx) => {
   try {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
 
-    const state = userStates[ctx.from.id];
-    if (!state || !state.dealData || state.step !== "awaitingDeliveryTime") {
-      return;
+    const userId = ctx.from.id;
+
+    // ✅ Safe state access (Render-safe)
+    let state = userStates[userId];
+
+    if (!state || !state.dealData) {
+      console.warn("⚠️ Missing state for user:", userId);
+
+      return await ctx.reply(
+        "⚠️ Your session expired. Please start creating the deal again.",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔄 Create Deal Again", "CREATE_DEAL")]
+        ])
+      );
     }
 
-    const selectedRaw = ctx.match[1];
+    const selectedRaw = ctx.match?.[1];
 
+    if (!selectedRaw) {
+      console.error("❌ No TIME value received");
+      return ctx.reply("❌ Invalid selection. Please try again.");
+    }
+
+    // ===== HANDLE CUSTOM INPUT =====
     if (selectedRaw === "CUSTOM") {
       state.step = "awaitingCustomTime";
-      return await ctx.reply("✍️ Enter custom delivery time (e.g., 10 Days):");
+      userStates[userId] = state;
+
+      return await ctx.reply(
+        "✍️ Enter custom delivery time (number of days).\nExample: 10"
+      );
     }
 
-    const selected = parseInt(selectedRaw);
+    // ===== SAFE NUMBER PARSE =====
+    const selected = Number(selectedRaw);
 
-    if (isNaN(selected)) {
-      return await ctx.reply("❌ Invalid delivery time selected.");
+    if (!Number.isFinite(selected) || selected <= 0) {
+      console.error("❌ Invalid delivery value:", selectedRaw);
+      return ctx.reply("❌ Invalid delivery time selected.");
     }
 
+    // ===== SAVE DELIVERY TIME =====
     state.dealData.deliveryTime = `${selected} Day${selected > 1 ? "s" : ""}`;
     state.step = "confirmDeal";
 
+    // 🔒 Persist state again (important for stability)
+    userStates[userId] = state;
+
     const d = state.dealData;
 
+    // ===== FINAL VALIDATION (NO CRASH GUARANTEE) =====
+    if (!d.seller || !d.amount || !d.description) {
+      console.error("❌ Incomplete deal data:", d);
+
+      return ctx.reply(
+        "⚠️ Something went wrong with your deal data. Please restart.",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔄 Restart", "CREATE_DEAL")]
+        ])
+      );
+    }
+
+    // ===== SUCCESS RESPONSE =====
     await ctx.reply(
       `✅ *Deal Summary*\n\n` +
       `👤 Seller: ${d.seller}\n` +
@@ -841,10 +881,18 @@ bot.action(/TIME_(.+)/, async (ctx) => {
     );
 
   } catch (err) {
-    console.error("Error in delivery time handler:", err);
-    await ctx.reply("❌ Failed to process delivery time. Try again.");
+    console.error("🚨 DELIVERY TIME HANDLER ERROR:", err);
+
+    try {
+      await ctx.reply(
+        "❌ Something went wrong while processing delivery time.\nPlease try again."
+      );
+    } catch (e) {
+      console.error("Reply failed:", e);
+    }
   }
 });
+
 // ===== CONFIRM / CANCEL DEAL =====
 bot.action('CONFIRM_DEAL', async (ctx) => {
   try {
