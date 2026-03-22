@@ -185,8 +185,8 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
   try {
     const state = userStates[ctx.from.id];
 
-    // Skip if seller delivering
-    if (state?.step === "awaitingDeliveryFile") return;
+// DO NOT skip delivery files
+// Let them pass through and be processed
 
     const deals = getDeals();
     const activeDeal = deals.find(
