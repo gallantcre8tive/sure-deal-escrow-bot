@@ -113,6 +113,15 @@ bot.action('PROFILE', async (ctx) => {
   }
 });
 
+function formatTimeLeft(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / (3600 * 24));
+  const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  return `${days}d ${hours}h ${minutes}m`;
+}
+
 // ===== VIEW REVIEWS =====
 bot.action('VIEW_REVIEWS', async (ctx) => {
   try {
@@ -948,7 +957,9 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     const deal = deals.find(d => d.dealId === dealId);
 
     if (!deal) return ctx.reply("❌ Deal not found.");
-    if (deal.status !== 'paid') return ctx.reply("⚠️ Payment not confirmed yet.");
+    if (deal.status !== 'paid' && deal.status !== 'in_progress') {
+  return ctx.reply("⚠️ Payment not confirmed yet.");
+}
 
     const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
