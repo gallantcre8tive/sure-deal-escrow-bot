@@ -312,7 +312,13 @@ switch (fileType) {
 }
   
 return ctx.reply("✅ File received and forwarded.");  
+
+  } catch (err) {
+    console.error("Error in file handler:", err);
+    await ctx.reply("❌ An unexpected error occurred while processing your file.");
+  }
 });
+
 
   // RESET DELIVERY ACTION
   bot.action(/RESET_DELIVERY_(.+)/, async (ctx) => {
