@@ -183,6 +183,11 @@ bot.action('CREATE_DEAL', async (ctx) => {
 // ===== FILE & PAYMENT SCREENSHOT HANDLER =====
 bot.on(['document','photo','video','audio','voice'], async (ctx) => {
   try {
+    const state = userStates[ctx.from.id];
+
+    // Skip if seller delivering
+    if (state?.step === "awaitingDeliveryFile") return;
+
     const deals = getDeals();
     const activeDeal = deals.find(
       d => d.buyer === ctx.from.id || (users[d.seller] && users[d.seller] === ctx.from.id)
@@ -190,13 +195,13 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
 
     if (!activeDeal) return ctx.reply("⚠️ No active deal found.");
 
-    const file = ctx.message.document ||
-                 ctx.message.photo?.[ctx.message.photo.length - 1] ||
-                 ctx.message.video ||
-                 ctx.message.audio ||
-                 ctx.message.voice;
-
-    if (!file) return ctx.reply("⚠️ No valid file found.");
+    // ✅ ONE clean file definition
+    const file =
+      ctx.message.document ||
+      ctx.message.photo?.[ctx.message.photo.length - 1] ||
+      ctx.message.video ||
+      ctx.message.audio ||
+      ctx.message.voice;
 
     // ===== PAYMENT SCREENSHOT =====
     if (activeDeal.status === "waiting_payment" && ctx.from.id === activeDeal.buyer) {
@@ -230,53 +235,168 @@ await ctx.telegram.sendPhoto(
       return ctx.reply("✅ Screenshot received. Waiting for admin verification.");
     }
 
-    // ===== NORMAL FILE SHARING =====
-    if (!activeDeal.files) activeDeal.files = [];
+// ===== NORMAL FILE SHARING (PRO VERSION) =====
+if (!activeDeal.files) activeDeal.files = [];
 
-    activeDeal.files.push({
-      from: ctx.from.id,
-      file_id: file.file_id,
-      type: ctx.updateType,
-      caption: ctx.message.caption || null
-    });
+const fileType =
+  ctx.message.document ? 'document' :
+  ctx.message.photo ? 'photo' :
+  ctx.message.video ? 'video' :
+  ctx.message.audio ? 'audio' :
+  ctx.message.voice ? 'voice' : null;
+
+if (!fileType || !file) {
+  return ctx.reply("⚠️ Unsupported file type.");
+}
+
+// ===== AUTO ZIP DETECTION =====
+let detectedType = fileType;
+if (fileType === 'document' && file.file_name) {
+  const name = file.file_name.toLowerCase();
+  if (name.endsWith('.zip') || name.endsWith('.rar')) {
+    detectedType = 'archive';
+  }
+}
+
+// ===== MULTIPLE FILE SUPPORT =====
+if (!activeDeal.tempFiles) activeDeal.tempFiles = [];
+
+activeDeal.tempFiles.push({
+  from: ctx.from.id,
+  file_id: file.file_id,
+  type: detectedType,
+  caption: ctx.message.caption || null,
+  name: file.file_name || null
+});
+
+saveDeals(deals);
+
+// ===== DELIVERY MODE CHECK =====
+// If seller is delivering → accumulate files
+if (state?.step === "awaitingDeliveryFile") {
+  return ctx.reply(
+    `📦 File added to delivery (${activeDeal.tempFiles.length} files)\n\n` +
+    `You can send more files or finish delivery.`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Send All Files", `SEND_DELIVERY_${activeDeal.dealId}`)],
+      [Markup.button.callback("🔄 Reset Delivery", `RESET_DELIVERY_${activeDeal.dealId}`)]
+    ])
+  );
+}
+
+// ===== NORMAL CHAT FILE SHARING =====
+const recipientId = ctx.from.id === activeDeal.buyer
+  ? users[activeDeal.seller?.toLowerCase?.()]
+  : activeDeal.buyer;
+
+if (!recipientId) {
+  return ctx.reply("⚠️ The other party has not started the bot yet.");
+}
+
+switch (fileType) {
+  case 'document':
+    await ctx.telegram.sendDocument(recipientId, file.file_id);
+    break;
+  case 'photo':
+    await ctx.telegram.sendPhoto(recipientId, file.file_id);
+    break;
+  case 'video':
+    await ctx.telegram.sendVideo(recipientId, file.file_id);
+    break;
+  case 'audio':
+    await ctx.telegram.sendAudio(recipientId, file.file_id);
+    break;
+  case 'voice':
+    await ctx.telegram.sendVoice(recipientId, file.file_id);
+    break;
+}
+  
+return ctx.reply("✅ File received and forwarded.");  
+});
+
+  // RESET DELIVERY ACTION
+  bot.action(/RESET_DELIVERY_(.+)/, async (ctx) => {
+  try {
+    const dealId = ctx.match[1];
+    const deals = getDeals();
+    const deal = deals.find(d => d.dealId === dealId);
+
+    if (!deal) return ctx.reply("❌ Deal not found.");
+
+    deal.tempFiles = [];
+    saveDeals(deals);
+
+    await ctx.answerCbQuery();
+    await ctx.reply("🔄 Delivery reset. Upload new files now.");
+
+  } catch (err) {
+    console.error("RESET DELIVERY ERROR:", err);
+    ctx.reply("❌ Failed to reset delivery.");
+  }
+});
+// FINAL DELIVERY HERE
+bot.action(/SEND_DELIVERY_(.+)/, async (ctx) => {
+  try {
+    const dealId = ctx.match[1];
+    const deals = getDeals();
+    const deal = deals.find(d => d.dealId === dealId);
+
+    if (!deal || !deal.tempFiles || deal.tempFiles.length === 0) {
+      return ctx.reply("⚠️ No files to send.");
+    }
+
+    const buyerId = deal.buyer;
+
+    const buttons = Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Approve Delivery", `APPROVE_${dealId}`)],
+      [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
+    ]);
+
+    // Send all files
+    for (const f of deal.tempFiles) {
+      switch (f.type) {
+        case 'document':
+        case 'archive':
+          await ctx.telegram.sendDocument(buyerId, f.file_id);
+          break;
+        case 'photo':
+          await ctx.telegram.sendPhoto(buyerId, f.file_id);
+          break;
+        case 'video':
+          await ctx.telegram.sendVideo(buyerId, f.file_id);
+          break;
+        case 'audio':
+          await ctx.telegram.sendAudio(buyerId, f.file_id);
+          break;
+        case 'voice':
+          await ctx.telegram.sendVoice(buyerId, f.file_id);
+          break;
+      }
+    }
+
+    // Send approval buttons after files
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `📦 Delivery received for Deal ${dealId}`,
+      buttons
+    );
+
+    // Save permanently
+    deal.files = [...(deal.files || []), ...deal.tempFiles];
+    deal.tempFiles = [];
+    deal.status = "delivered";
 
     saveDeals(deals);
 
-    const recipientId = ctx.from.id === activeDeal.buyer
-      ? users[activeDeal.seller]
-      : activeDeal.buyer;
+    delete userStates[ctx.from.id];
 
-    if (recipientId) {
-      switch (ctx.updateType) {
-        case 'document':
-          await ctx.telegram.sendDocument(recipientId, file.file_id);
-          break;
-        case 'photo':
-          await ctx.telegram.sendPhoto(recipientId, file.file_id);
-          break;
-        case 'video':
-          await ctx.telegram.sendVideo(recipientId, file.file_id);
-          break;
-        case 'audio':
-          await ctx.telegram.sendAudio(recipientId, file.file_id);
-          break;
-        case 'voice':
-          await ctx.telegram.sendVoice(recipientId, file.file_id);
-          break;
-        default:
-          return ctx.reply("⚠️ Unsupported file type.");
-      }
-      return ctx.reply("✅ File received and forwarded.");
-    } else {
-      return ctx.reply("⚠️ The other party has not started the bot yet.");
-    }
+    await ctx.reply("✅ All files delivered successfully.");
 
   } catch (err) {
-    console.error("Error handling file:", err);
-    ctx.reply("❌ Something went wrong while processing your file.");
+    console.error("SEND DELIVERY ERROR:", err);
+    ctx.reply("❌ Failed to send delivery.");
   }
 });
-
 // ===== ADMIN CONFIRM PAYMENT =====
 bot.action(/ADMIN_CONFIRM_(.+)/, async (ctx) => {
   try {
@@ -1139,77 +1259,6 @@ bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
     ctx.reply("❌ Failed to start delivery.");
   }
 });
-
-
-// ===== HANDLE DELIVERY FILE UPLOAD =====
-bot.on(['document','photo','video','audio','voice'], async (ctx) => {
-  try {
-    const state = userStates[ctx.from.id];
-
-    // ✅ ONLY handle delivery upload here
-    if (state?.step !== "awaitingDeliveryFile") return;
-
-    const dealId = state.dealId;
-    const deals = getDeals();
-    const deal = deals.find(d => d.dealId === dealId);
-
-    if (!deal) {
-      delete userStates[ctx.from.id];
-      return ctx.reply("❌ Deal not found.");
-    }
-
-    // Get file
-    const file = ctx.message.document ||
-                 ctx.message.photo?.[ctx.message.photo.length - 1] ||
-                 ctx.message.video ||
-                 ctx.message.audio ||
-                 ctx.message.voice;
-
-    if (!file) return ctx.reply("⚠️ Invalid file.");
-
-    const buyerId = deal.buyer;
-
-    // ===== SEND FILE TO BUYER WITH BUTTONS =====
-    const buttons = Markup.inlineKeyboard([
-      [Markup.button.callback("✅ Approve Delivery", `APPROVE_${dealId}`)],
-      [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
-    ]);
-
-    switch (true) {
-      case !!ctx.message.document:
-        await ctx.telegram.sendDocument(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
-        break;
-      case !!ctx.message.photo:
-        await ctx.telegram.sendPhoto(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
-        break;
-      case !!ctx.message.video:
-        await ctx.telegram.sendVideo(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
-        break;
-      case !!ctx.message.audio:
-        await ctx.telegram.sendAudio(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
-        break;
-      case !!ctx.message.voice:
-        await ctx.telegram.sendVoice(buyerId, file.file_id, { reply_markup: buttons.reply_markup });
-        break;
-      default:
-        return ctx.reply("⚠️ Unsupported file type.");
-    }
-
-    // Update deal AFTER sending file
-    deal.status = "delivered";
-    saveDeals(deals);
-
-    // Notify seller
-    await ctx.reply("✅ Work delivered successfully. Waiting for buyer approval.");
-
-    delete userStates[ctx.from.id];
-
-  } catch (err) {
-    console.error("Error handling delivery file:", err);
-    ctx.reply("❌ Failed to send delivery file.");
-  }
-});
-
 
 // ===== BUYER APPROVES DELIVERY =====
 bot.action(/APPROVE_(.+)/, async (ctx) => {
