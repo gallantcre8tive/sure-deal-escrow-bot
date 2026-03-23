@@ -378,12 +378,22 @@ bot.action(/SEND_DELIVERY_(.+)/, async (ctx) => {
       }
     }
 
-    // Send approval buttons after files
-    await ctx.telegram.sendMessage(
-      buyerId,
-      `📦 Delivery received for Deal ${dealId}`,
-      buttons
-    );
+// Send files first (keep your loop)
+
+// Then send a CLEAN delivery message
+await ctx.telegram.sendMessage(
+  buyerId,
+  `📦 *New Delivery Received*\n\n` +
+  `The seller has submitted your order.\n\n` +
+  `Please review the files and confirm if everything is correct.`,
+  {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Accept Delivery", `APPROVE_${dealId}`)],
+      [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
+    ])
+  }
+);
 
     // Save permanently
     deal.files = [...(deal.files || []), ...deal.tempFiles];
@@ -394,7 +404,12 @@ bot.action(/SEND_DELIVERY_(.+)/, async (ctx) => {
 
     delete userStates[ctx.from.id];
 
-    await ctx.reply("✅ All files delivered successfully.");
+    await ctx.reply(
+  `📦 *Order Submitted Successfully*\n\n` +
+  `Your delivery has been sent to the buyer.\n\n` +
+  `⏳ Please wait for buyer approval.`,
+  { parse_mode: "Markdown" }
+);
 
   } catch (err) {
     console.error("SEND DELIVERY ERROR:", err);
@@ -1284,31 +1299,46 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     ctx.reply("❌ Failed to start work. Please try again.");
   }
 });
-// ===== SELLER DELIVERS WORK (STEP 1: ASK FOR FILE) =====
-bot.action(/DELIVER_WORK_(.+)/, async (ctx) => {
+
+// ===== SELLER DELIVERS WORK =====
+bot.on('document', async (ctx) => {
   try {
-    const dealId = ctx.match[1];
-
+    const sellerId = ctx.from.id;
+    const sellerUsername = ctx.from.username?.toLowerCase();
     const deals = getDeals();
-    const deal = deals.find(d => d.dealId === dealId);
 
-    if (!deal) return ctx.reply("❌ Deal not found.");
-    if (deal.status !== 'in_progress') {
-      return ctx.reply("⚠️ Work has not started yet.");
+    // Find a pending delivery for this seller
+    const deal = deals.find(d => d.seller?.toLowerCase() === sellerUsername && d.status === 'in_progress');
+
+    if (!deal) {
+      return ctx.reply("❌ No active deal found to deliver for.");
     }
 
-    // Save state so next file = delivery
-    userStates[ctx.from.id] = {
-      step: "awaitingDeliveryFile",
-      dealId
-    };
+    // Save file info in the deal
+    deal.status = 'delivered';
+    deal.fileId = ctx.message.document.file_id;
+    deal.fileName = ctx.message.document.file_name;
+    saveDeals(deals);
 
-    await ctx.answerCbQuery();
-    await ctx.reply("📤 Please upload the work file (image, video, pdf, zip, etc).");
+    const buyerId = deal.buyer;
+
+    // Send file to buyer with approval/dispute buttons
+    await ctx.telegram.sendDocument(buyerId, deal.fileId, {
+      caption: `📦 Delivery received from ${deal.seller} for Deal ${deal.dealId}.\n\nPlease review the file: ${deal.fileName}\n\nDo you accept the delivery?`,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ Accept Delivery", callback_data: `APPROVE_${deal.dealId}` }],
+          [{ text: "⚠️ Open Dispute", callback_data: `DISPUTE_${deal.dealId}` }]
+        ]
+      }
+    });
+
+    // Confirm to seller
+    await ctx.reply("✅ File sent to buyer. Waiting for their approval.");
 
   } catch (err) {
-    console.error("Error in DELIVER_WORK:", err);
-    ctx.reply("❌ Failed to start delivery.");
+    console.error("Error in DELIVERY:", err);
+    ctx.reply("❌ Failed to send delivery.");
   }
 });
 
@@ -1325,21 +1355,24 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
     }
 
     const sellerId = users[deal.seller?.toLowerCase?.()];
-    if (!sellerId) {
-      return ctx.reply("⚠️ Seller has not started the bot.");
-    }
+    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
 
+    // Mark as completed
     deal.status = 'completed';
     saveDeals(deals);
 
     const buyerId = deal.buyer;
 
-    await ctx.telegram.sendMessage(buyerId, `🎉 Deal ${dealId} completed!`);
+    // Notify buyer
+    await ctx.telegram.sendMessage(buyerId, `🎉 Deal ${dealId} completed! Thank you for confirming.`);
+
+    // Ask seller for wallet to process payment
     await ctx.telegram.sendMessage(
       sellerId,
-      `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
+      `🎉 Deal ${dealId} completed!\nYou earned ${deal.sellerReceives} ${deal.currency}.\n\n💳 Please provide your wallet address and network (e.g., Ethereum, BSC, Solana) so we can process your payment.\n⏳ Wait a few minutes after sending, payment will be processed automatically.`
     );
 
+    // Optional: prompt reviews
     try {
       promptReview(buyerId, dealId, 'buyer');
       promptReview(sellerId, dealId, 'seller');
@@ -1352,7 +1385,6 @@ bot.action(/APPROVE_(.+)/, async (ctx) => {
     ctx.reply("❌ Failed to approve delivery.");
   }
 });
-
 
 // ===== DISPUTE =====
 bot.action(/DISPUTE_(.+)/, async (ctx) => {
@@ -1370,7 +1402,7 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
 
     await ctx.telegram.sendMessage(
       adminId,
-      `⚠️ Dispute opened for Deal ${dealId}`
+      `⚠️ Dispute opened for Deal ${dealId} by buyer.`
     );
 
     await ctx.reply("⚠️ Dispute opened. Admin has been notified.");
@@ -1385,9 +1417,7 @@ bot.action(/DISPUTE_(.+)/, async (ctx) => {
 bot.command('release', async (ctx) => {
   try {
     const adminId = Number(process.env.ADMIN_ID);
-    if (!adminId || ctx.from.id !== adminId) {
-      return ctx.reply("❌ Not authorized");
-    }
+    if (!adminId || ctx.from.id !== adminId) return ctx.reply("❌ Not authorized");
 
     const args = ctx.message.text.split(' ');
     const dealId = args[1];
@@ -1399,11 +1429,8 @@ bot.command('release', async (ctx) => {
 
     if (!deal) return ctx.reply("❌ Deal not found.");
 
-    // ✅ Safe seller ID (FIXED)
     const sellerId = users[deal.seller?.toLowerCase?.()];
-    if (!sellerId) {
-      return ctx.reply("⚠️ Seller has not started the bot.");
-    }
+    if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
 
     const buyerId = deal.buyer;
 
@@ -1411,18 +1438,15 @@ bot.command('release', async (ctx) => {
     saveDeals(deals);
 
     // Notify buyer
-    await ctx.telegram.sendMessage(
-      buyerId,
-      `🎉 Deal ${dealId} completed!`
-    );
+    await ctx.telegram.sendMessage(buyerId, `🎉 Deal ${dealId} completed!`);
 
-    // Notify seller
+    // Ask seller for wallet to process payment
     await ctx.telegram.sendMessage(
       sellerId,
-      `🎉 Deal ${dealId} completed!\nYou received ${deal.sellerReceives} ${deal.currency}.`
+      `🎉 Deal ${dealId} completed!\nYou earned ${deal.sellerReceives} ${deal.currency}.\n\n💳 Please provide your wallet address and network (e.g., Ethereum, BSC, Solana) so we can process your payment.\n⏳ Wait a few minutes after sending, payment will be processed automatically.`
     );
 
-    await ctx.reply("✅ Funds released successfully.");
+    await ctx.reply("✅ Funds release triggered. Seller will provide wallet to receive payment.");
 
   } catch (err) {
     console.error("Error in ADMIN RELEASE:", err);
