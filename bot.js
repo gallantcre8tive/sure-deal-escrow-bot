@@ -1175,8 +1175,10 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
     if (!deal) return ctx.reply("❌ Deal not found.");
     if (deal.status !== 'in_progress') return ctx.reply("⚠️ Cannot deliver. Deal not in progress.");
 
-    const sellerId = users[deal.seller?.toLowerCase?.()];
-    if (!sellerId || ctx.from.id !== sellerId) return ctx.reply("⚠️ Only the seller can deliver this deal.");
+    const sellerKey = deal.seller?.replace(/^@/, '').toLowerCase();
+const sellerId = users[sellerKey];
+if (!sellerId || ctx.from.id !== sellerId) 
+  return ctx.reply("⚠️ Only the seller can deliver this deal.");
 
     const buyerId = deal.buyer;
 
