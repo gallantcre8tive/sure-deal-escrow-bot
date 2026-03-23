@@ -186,7 +186,6 @@ bot.on(['document','photo','video','audio','voice'], async (ctx) => {
     const state = userStates[ctx.from.id];
 
 // DO NOT skip delivery files
-if (state?.step === "awaitingDeliveryFile") return;
     const deals = getDeals();
     const activeDeal = deals.find(
       d => d.buyer === ctx.from.id || (users[d.seller] && users[d.seller] === ctx.from.id)
