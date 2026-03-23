@@ -1165,6 +1165,81 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
       `🟢 Good news! Your seller has started work on Deal ${dealId}.\n⏱ Delivery countdown has started.`
     );
 
+// ===== SELLER DELIVER WORK =====
+bot.action(/DELIVER_(.+)/, async (ctx) => {
+  try {
+    const dealId = ctx.match[1];
+    const deals = getDeals();
+    const deal = deals.find(d => d.dealId === dealId);
+
+    if (!deal) return ctx.reply("❌ Deal not found.");
+    if (deal.status !== 'in_progress') return ctx.reply("⚠️ Cannot deliver. Deal not in progress.");
+
+    const sellerId = users[deal.seller?.toLowerCase?.()];
+    if (!sellerId || ctx.from.id !== sellerId) return ctx.reply("⚠️ Only the seller can deliver this deal.");
+
+    const buyerId = deal.buyer;
+
+    // Ensure tempFiles exist
+    if (!deal.tempFiles || deal.tempFiles.length === 0) {
+      return ctx.reply("⚠️ No files uploaded for delivery. Please upload files first.");
+    }
+
+    // Send all files to buyer
+    for (const f of deal.tempFiles) {
+      switch (f.type) {
+        case 'document':
+        case 'archive':
+          await ctx.telegram.sendDocument(buyerId, f.file_id);
+          break;
+        case 'photo':
+          await ctx.telegram.sendPhoto(buyerId, f.file_id);
+          break;
+        case 'video':
+          await ctx.telegram.sendVideo(buyerId, f.file_id);
+          break;
+        case 'audio':
+          await ctx.telegram.sendAudio(buyerId, f.file_id);
+          break;
+        case 'voice':
+          await ctx.telegram.sendVoice(buyerId, f.file_id);
+          break;
+      }
+    }
+
+    // Send delivery message with buttons
+    await ctx.telegram.sendMessage(
+      buyerId,
+      `📦 *New Delivery Received*\n\nThe seller has submitted your order for Deal ${dealId}.\nPlease review the files and confirm if everything is correct.`,
+      {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Accept Delivery", `APPROVE_${dealId}`)],
+          [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
+        ])
+      }
+    );
+
+    // Save permanently
+    deal.files = [...(deal.files || []), ...deal.tempFiles];
+    deal.tempFiles = [];
+    deal.status = "delivered";
+
+    saveDeals(deals);
+
+    delete userStates[sellerId];
+
+    await ctx.reply(
+      `📦 *Delivery Sent Successfully*\n\nYour delivery has been sent to the buyer.\n⏳ Waiting for buyer approval.`,
+      { parse_mode: "Markdown" }
+    );
+
+  } catch (err) {
+    console.error("DELIVER ACTION ERROR:", err);
+    await ctx.reply("❌ Failed to deliver files. Try again.");
+  }
+});
+
     // ===== DELIVERY COUNTDOWN + LIVE TIMER =====
     if (deal.deliveryTime) {
       const deliveryDays = parseInt(deal.deliveryTime.toString().trim());
