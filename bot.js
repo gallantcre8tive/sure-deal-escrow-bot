@@ -1142,6 +1142,7 @@ const sellerId = users[deal.seller?.toLowerCase?.()];
     ctx.reply("❌ Failed to mark payment. Try again.");
   }
 });
+
 // ===== SELLER STARTS WORK =====
 bot.action(/START_WORK_(.+)/, async (ctx) => {
   try {
@@ -1151,8 +1152,8 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
 
     if (!deal) return ctx.reply("❌ Deal not found.");
     if (deal.status !== 'paid' && deal.status !== 'in_progress') {
-  return ctx.reply("⚠️ Payment not confirmed yet.");
-}
+      return ctx.reply("⚠️ Payment not confirmed yet.");
+    }
 
     const sellerId = users[deal.seller?.toLowerCase?.()];
     if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
@@ -1163,17 +1164,24 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     deal.status = 'in_progress';
     saveDeals(deals);
 
+    // Acknowledge button click
     await ctx.answerCbQuery();
 
     // Notify buyer
-    await bot.telegram.sendMessage(
+    await ctx.telegram.sendMessage(
       buyerId,
       `🟢 Good news! Your seller has started work on Deal ${dealId}.\n⏱ Delivery countdown has started.`
     );
 
+    // Optional: notify seller as confirmation
+    await ctx.telegram.sendMessage(
+      sellerId,
+      `🚀 You have started work on Deal ${dealId}.\nKeep the buyer updated on progress.`
+    );
+
   } catch (err) {
-    console.error("DELIVER ACTION ERROR:", err);
-    await ctx.reply("❌ Failed to deliver files. Try again.");
+    console.error("START_WORK ERROR:", err);
+    await ctx.reply("❌ Failed to start work. Try again.");
   }
 });
 
