@@ -1231,129 +1231,118 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
         deal.deliveryDeadline = Date.now() + deliveryMs;
         saveDeals(deals);
 
-        // ===== SEND INITIAL COUNTDOWN MESSAGE =====
-        const countdownMsg = await bot.telegram.sendMessage(
-          sellerId,
-          `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(deliveryMs)}\n\nDeal ID: ${dealId}`,
-          Markup.inlineKeyboard([
-            [Markup.button.callback("⏳ Request Extension", `EXTEND_${dealId}`)],
-            [Markup.button.callback("📦 Deliver Work", `DELIVER_${dealId}`)]
-          ])
-        );
+       // ===== SEND INITIAL COUNTDOWN MESSAGE =====
+(async () => {
+  try {
+    const countdownMsg = await bot.telegram.sendMessage(
+      sellerId,
+      `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(deliveryMs)}\n\nDeal ID: ${dealId}`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("⏳ Request Extension", `EXTEND_${dealId}`)],
+        [Markup.button.callback("📦 Deliver Work", `DELIVER_${dealId}`)]
+      ])
+    );
 
-        deal.countdownMessageId = countdownMsg.message_id;
-        saveDeals(deals);
+    deal.countdownMessageId = countdownMsg.message_id;
+    saveDeals(deals);
 
-        // ===== CLEAR OLD TIMERS =====
-        if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
-        if (paymentTimers[`${dealId}_24h`]) clearTimeout(paymentTimers[`${dealId}_24h`]);
-        if (paymentTimers[`${dealId}_12h`]) clearTimeout(paymentTimers[`${dealId}_12h`]);
-        if (paymentTimers[`${dealId}_countdown`]) clearInterval(paymentTimers[`${dealId}_countdown`]);
+    // ===== CLEAR OLD TIMERS =====
+    if (paymentTimers[dealId]) clearTimeout(paymentTimers[dealId]);
+    if (paymentTimers[`${dealId}_24h`]) clearTimeout(paymentTimers[`${dealId}_24h`]);
+    if (paymentTimers[`${dealId}_12h`]) clearTimeout(paymentTimers[`${dealId}_12h`]);
+    if (paymentTimers[`${dealId}_countdown`]) clearInterval(paymentTimers[`${dealId}_countdown`]);
 
-        // ===== REMINDERS =====
-        const reminder24h = deliveryMs - (24 * 60 * 60 * 1000);
-        const reminder12h = deliveryMs - (12 * 60 * 60 * 1000);
+    // ===== REMINDERS =====
+    const reminder24h = deliveryMs - 24 * 60 * 60 * 1000;
+    const reminder12h = deliveryMs - 12 * 60 * 60 * 1000;
 
-        if (reminder24h > 0) {
-          paymentTimers[`${dealId}_24h`] = setTimeout(async () => {
-            try {
-              await bot.telegram.sendMessage(buyerId, `⚠️ 24 hours left for Deal ${dealId} delivery!`);
-              await bot.telegram.sendMessage(sellerId, `⚠️ 24 hours left to deliver Deal ${dealId}.`);
-            } catch (e) {
-              console.error("24h reminder error:", e);
-            }
-          }, reminder24h);
+    if (reminder24h > 0) {
+      paymentTimers[`${dealId}_24h`] = setTimeout(async () => {
+        try {
+          await bot.telegram.sendMessage(buyerId, `⚠️ 24 hours left for Deal ${dealId} delivery!`);
+          await bot.telegram.sendMessage(sellerId, `⚠️ 24 hours left to deliver Deal ${dealId}.`);
+        } catch (e) {
+          console.error("24h reminder error:", e);
         }
-
-        if (reminder12h > 0) {
-          paymentTimers[`${dealId}_12h`] = setTimeout(async () => {
-            try {
-              await bot.telegram.sendMessage(buyerId, `⚠️ 12 hours left for Deal ${dealId} delivery!`);
-              await bot.telegram.sendMessage(sellerId, `⚠️ 12 hours left to deliver Deal ${dealId}.`);
-            } catch (e) {
-              console.error("12h reminder error:", e);
-            }
-          }, reminder12h);
-        }
-
-        // ===== LIVE COUNTDOWN UPDATE =====
-        paymentTimers[`${dealId}_countdown`] = setInterval(async () => {
-          try {
-            const updatedDeals = getDeals();
-            const currentDeal = updatedDeals.find(d => d.dealId === dealId);
-
-            if (!currentDeal || currentDeal.status !== 'in_progress') {
-              clearInterval(paymentTimers[`${dealId}_countdown`]);
-              return;
-            }
-
-            const timeLeft = currentDeal.deliveryDeadline - Date.now();
-
-            if (timeLeft <= 0) {
-              clearInterval(paymentTimers[`${dealId}_countdown`]);
-
-              try {
-                await bot.telegram.editMessageText(
-                  sellerId,
-                  currentDeal.countdownMessageId,
-                  null,
-                  `⚠️ Delivery time is over!\n\nDeal ID: ${dealId}`,
-                  {
-                    reply_markup: {
-                      inline_keyboard: [
-                        [{ text: "📦 Deliver Now", callback_data: `DELIVER_${dealId}` }]
-                      ]
-                    }
-                  }
-                );
-              } catch (e) {
-                console.error("Edit message error:", e);
-              }
-
-              // Final notifications
-              await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
-              await bot.telegram.sendMessage(
-                sellerId,
-                `⚠️ Delivery time is over! Please deliver immediately.`
-              );
-
-              return;
-            }
-
-            try {
-              await bot.telegram.editMessageText(
-                sellerId,
-                currentDeal.countdownMessageId,
-                null,
-                `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(timeLeft)}\n\nDeal ID: ${dealId}`,
-                {
-                  reply_markup: {
-                    inline_keyboard: [
-                      [{ text: "⏳ Request Extension", callback_data: `EXTEND_${dealId}` }],
-                      [{ text: "📦 Deliver Work", callback_data: `DELIVER_${dealId}` }]
-                    ]
-                  }
-                }
-              );
-            } catch (e) {
-              console.error("Countdown edit error:", e);
-            }
-
-          } catch (err) {
-            console.error("Countdown update error:", err);
-          }
-        }, 5 * 60 * 1000); // every 5 minutes
-
-      } else {
-        console.warn(`Invalid deliveryTime for Deal ${dealId}: "${deal.deliveryTime}"`);
-      }
+      }, reminder24h);
     }
 
+    if (reminder12h > 0) {
+      paymentTimers[`${dealId}_12h`] = setTimeout(async () => {
+        try {
+          await bot.telegram.sendMessage(buyerId, `⚠️ 12 hours left for Deal ${dealId} delivery!`);
+          await bot.telegram.sendMessage(sellerId, `⚠️ 12 hours left to deliver Deal ${dealId}.`);
+        } catch (e) {
+          console.error("12h reminder error:", e);
+        }
+      }, reminder12h);
+    }
+
+    // ===== LIVE COUNTDOWN UPDATE =====
+    paymentTimers[`${dealId}_countdown`] = setInterval(async () => {
+      try {
+        const updatedDeals = getDeals();
+        const currentDeal = updatedDeals.find(d => d.dealId === dealId);
+
+        if (!currentDeal || currentDeal.status !== "in_progress") {
+          clearInterval(paymentTimers[`${dealId}_countdown`]);
+          return;
+        }
+
+        const timeLeft = currentDeal.deliveryDeadline - Date.now();
+
+        if (timeLeft <= 0) {
+          clearInterval(paymentTimers[`${dealId}_countdown`]);
+
+          try {
+            await bot.telegram.editMessageText(
+              sellerId,
+              currentDeal.countdownMessageId,
+              null,
+              `⚠️ Delivery time is over!\n\nDeal ID: ${dealId}`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [{ text: "📦 Deliver Now", callback_data: `DELIVER_${dealId}` }]
+                  ]
+                }
+              }
+            );
+          } catch (e) {
+            console.error("Edit message error:", e);
+          }
+
+          await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
+          await bot.telegram.sendMessage(sellerId, `⚠️ Delivery time is over! Please deliver immediately.`);
+          return;
+        }
+
+        try {
+          await bot.telegram.editMessageText(
+            sellerId,
+            currentDeal.countdownMessageId,
+            null,
+            `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(timeLeft)}\n\nDeal ID: ${dealId}`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: "⏳ Request Extension", callback_data: `EXTEND_${dealId}` }],
+                  [{ text: "📦 Deliver Work", callback_data: `DELIVER_${dealId}` }]
+                ]
+              }
+            }
+          );
+        } catch (e) {
+          console.error("Countdown edit error:", e);
+        }
+      } catch (err) {
+        console.error("Countdown update error:", err);
+      }
+    }, 5 * 60 * 1000); // every 5 minutes
   } catch (err) {
-    console.error("Error in START_WORK handler:", err);
-    ctx.reply("❌ Failed to start work. Please try again.");
+    console.error("Error sending initial countdown message:", err);
   }
-});
+})();
 
 // ===== DISPUTE =====
 bot.action(/DISPUTE_(.+)/, async (ctx) => {
