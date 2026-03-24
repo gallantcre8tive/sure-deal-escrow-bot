@@ -1231,7 +1231,7 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
         deal.deliveryDeadline = Date.now() + deliveryMs;
         saveDeals(deals);
 
-       // ===== SEND INITIAL COUNTDOWN MESSAGE =====
+// ===== SEND INITIAL COUNTDOWN MESSAGE =====
 (async () => {
   try {
     const countdownMsg = await bot.telegram.sendMessage(
@@ -1253,8 +1253,8 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
     if (paymentTimers[`${dealId}_countdown`]) clearInterval(paymentTimers[`${dealId}_countdown`]);
 
     // ===== REMINDERS =====
-    const reminder24h = deliveryMs - 24 * 60 * 60 * 1000;
-    const reminder12h = deliveryMs - 12 * 60 * 60 * 1000;
+    const reminder24h = deliveryMs - (24 * 60 * 60 * 1000);
+    const reminder12h = deliveryMs - (12 * 60 * 60 * 1000);
 
     if (reminder24h > 0) {
       paymentTimers[`${dealId}_24h`] = setTimeout(async () => {
@@ -1284,7 +1284,7 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
         const updatedDeals = getDeals();
         const currentDeal = updatedDeals.find(d => d.dealId === dealId);
 
-        if (!currentDeal || currentDeal.status !== "in_progress") {
+        if (!currentDeal || currentDeal.status !== 'in_progress') {
           clearInterval(paymentTimers[`${dealId}_countdown`]);
           return;
         }
@@ -1312,8 +1312,13 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
             console.error("Edit message error:", e);
           }
 
+          // Final notifications
           await bot.telegram.sendMessage(buyerId, `⚠️ Delivery time for Deal ${dealId} is over!`);
-          await bot.telegram.sendMessage(sellerId, `⚠️ Delivery time is over! Please deliver immediately.`);
+          await bot.telegram.sendMessage(
+            sellerId,
+            `⚠️ Delivery time is over! Please deliver immediately.`
+          );
+
           return;
         }
 
@@ -1335,10 +1340,12 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
         } catch (e) {
           console.error("Countdown edit error:", e);
         }
+
       } catch (err) {
         console.error("Countdown update error:", err);
       }
     }, 5 * 60 * 1000); // every 5 minutes
+
   } catch (err) {
     console.error("Error sending initial countdown message:", err);
   }
