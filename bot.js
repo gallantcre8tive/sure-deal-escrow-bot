@@ -1517,18 +1517,6 @@ process.on('unhandledRejection', (err) => {
 // ===== RENDER DEPLOYMENT =====
 const PORT = process.env.PORT || 3000;
 
-// Optional: if using Render as a web service, keep a dummy server to bind the port
-const express = require('express');
-const app = express();
+bot.launch({ webhook: { domain: process.env.RENDER_EXTERNAL_URL, port: PORT } }); 
 
-app.get('/', (req, res) => res.send('Bot is running!'));
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
-
-// ===== START BOT =====
-bot.launch()
-  .then(() => console.log('Bot is running...'))
-  .catch(err => console.error('Bot launch failed:', err));
-
-// Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+console.log("Bot running with webhook...");
