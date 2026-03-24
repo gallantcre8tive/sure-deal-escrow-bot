@@ -1514,11 +1514,11 @@ process.on('unhandledRejection', (err) => {
 // ===== RENDER DEPLOYMENT =====
 const PORT = process.env.PORT || 3000;
 
-bot.launch({
-  webhook: {
-    domain: process.env.RENDER_EXTERNAL_URL,
-    port: PORT
-  }
-});
+// ===== BOT LAUNCH =====
+bot.launch()
+  .then(() => console.log("Bot running with webhook..."))
+  .catch(err => console.error("Bot failed to launch:", err));
 
-console.log("Bot running with webhook...");
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
