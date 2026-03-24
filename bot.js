@@ -1155,7 +1155,9 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
       return ctx.reply("⚠️ Payment not confirmed yet.");
     }
 
-    const sellerId = users[deal.seller?.toLowerCase?.()];
+    // Ensure deal.seller has '@' prefix
+const sellerUsernameKey = deal.seller.startsWith("@") ? deal.seller.toLowerCase() : "@" + deal.seller.toLowerCase();
+const sellerId = users[sellerUsernameKey];
     if (!sellerId) return ctx.reply("⚠️ Seller has not started the bot.");
 
     const buyerId = deal.buyer;
@@ -1184,6 +1186,7 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
     await ctx.reply("❌ Failed to start work. Try again.");
   }
 });
+
 
 // ===== SELLER CLICK "DELIVER WORK" =====
 bot.action(/DELIVER_(.+)/, async (ctx) => {
