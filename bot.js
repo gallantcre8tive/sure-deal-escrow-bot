@@ -256,25 +256,23 @@ if (fileType === 'document' && file.file_name) {
   }
 }
 
-// ===== MULTIPLE FILE SUPPORT =====
-if (!activeDeal.tempFiles) activeDeal.tempFiles = [];
-
-activeDeal.tempFiles.push({
-  from: ctx.from.id,
-  file_id: file.file_id,
-  type: detectedType,
-  caption: ctx.message.caption || null,
-  name: file.file_name || null
-});
-
-saveDeals(deals);
-
 // ===== DELIVERY MODE CHECK =====
 // If seller is delivering → accumulate files
 if (state?.step === "awaitingDeliveryFile") {
+  if (!activeDeal.tempFiles) activeDeal.tempFiles = [];
+
+  activeDeal.tempFiles.push({
+    from: ctx.from.id,
+    file_id: file.file_id,
+    type: detectedType,
+    caption: ctx.message.caption || null,
+    name: file.file_name || null
+  });
+
+  saveDeals(deals);
+
   return ctx.reply(
-    `📦 File added to delivery (${activeDeal.tempFiles.length} files)\n\n` +
-    `You can send more files or finish delivery.`,
+    `📦 File added (${activeDeal.tempFiles.length})\n\nSend more or click below:`,
     Markup.inlineKeyboard([
       [Markup.button.callback("✅ Send All Files", `SEND_DELIVERY_${activeDeal.dealId}`)],
       [Markup.button.callback("🔄 Reset Delivery", `RESET_DELIVERY_${activeDeal.dealId}`)]
@@ -780,11 +778,19 @@ if (state?.step === 'awaitingCustomTime') {
     }
 
     // ===== 6️⃣ CHAT FLOW =====
-    const deals = getDeals();
-    const activeDeal = deals.find(
-      d => (d.buyer === ctx.from.id || (users[d.seller] && users[d.seller] === ctx.from.id)) &&
-           ['pending_seller', 'waiting_payment', 'paid', 'in_progress'].includes(d.status)
-    );
+  const deals = getDeals();
+let activeDeal;
+
+// ✅ PRIORITIZE delivery mode
+if (state?.step === "awaitingDeliveryFile" && state.dealId) {
+  activeDeal = deals.find(d => d.dealId === state.dealId);
+} else {
+  activeDeal = deals.find(
+    d =>
+      d.buyer === ctx.from.id ||
+      (users[d.seller?.toLowerCase?.()] === ctx.from.id)
+  );
+}
 
     if (!activeDeal) return; // no active deal, ignore
 
@@ -1165,7 +1171,13 @@ bot.action(/START_WORK_(.+)/, async (ctx) => {
       `🟢 Good news! Your seller has started work on Deal ${dealId}.\n⏱ Delivery countdown has started.`
     );
 
-// ===== SELLER DELIVER WORK =====
+  } catch (err) {
+    console.error("DELIVER ACTION ERROR:", err);
+    await ctx.reply("❌ Failed to deliver files. Try again.");
+  }
+});
+
+// ===== SELLER CLICK "DELIVER WORK" =====
 bot.action(/DELIVER_(.+)/, async (ctx) => {
   try {
     const dealId = ctx.match[1];
@@ -1173,72 +1185,38 @@ bot.action(/DELIVER_(.+)/, async (ctx) => {
     const deal = deals.find(d => d.dealId === dealId);
 
     if (!deal) return ctx.reply("❌ Deal not found.");
-    if (deal.status !== 'in_progress') return ctx.reply("⚠️ Cannot deliver. Deal not in progress.");
-
-    const sellerKey = deal.seller?.replace(/^@/, '').toLowerCase();
-const sellerId = users[sellerKey];
-if (!sellerId || ctx.from.id !== sellerId) 
-  return ctx.reply("⚠️ Only the seller can deliver this deal.");
-
-    const buyerId = deal.buyer;
-
-    // Ensure tempFiles exist
-    if (!deal.tempFiles || deal.tempFiles.length === 0) {
-      return ctx.reply("⚠️ No files uploaded for delivery. Please upload files first.");
+    if (deal.status !== "in_progress") {
+      return ctx.reply("⚠️ Deal is not in progress.");
     }
 
-    // Send all files to buyer
-    for (const f of deal.tempFiles) {
-      switch (f.type) {
-        case 'document':
-        case 'archive':
-          await ctx.telegram.sendDocument(buyerId, f.file_id);
-          break;
-        case 'photo':
-          await ctx.telegram.sendPhoto(buyerId, f.file_id);
-          break;
-        case 'video':
-          await ctx.telegram.sendVideo(buyerId, f.file_id);
-          break;
-        case 'audio':
-          await ctx.telegram.sendAudio(buyerId, f.file_id);
-          break;
-        case 'voice':
-          await ctx.telegram.sendVoice(buyerId, f.file_id);
-          break;
-      }
+    const sellerId = users[deal.seller?.toLowerCase?.()];
+    if (!sellerId || ctx.from.id !== sellerId) {
+      return ctx.reply("⚠️ Only the seller can deliver.");
     }
 
-    // Send delivery message with buttons
-    await ctx.telegram.sendMessage(
-      buyerId,
-      `📦 *New Delivery Received*\n\nThe seller has submitted your order for Deal ${dealId}.\nPlease review the files and confirm if everything is correct.`,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Accept Delivery", `APPROVE_${dealId}`)],
-          [Markup.button.callback("⚠️ Open Dispute", `DISPUTE_${dealId}`)]
-        ])
-      }
-    );
+    // ✅ ENTER DELIVERY MODE
+    userStates[ctx.from.id] = {
+      step: "awaitingDeliveryFile",
+      dealId
+    };
 
-    // Save permanently
-    deal.files = [...(deal.files || []), ...deal.tempFiles];
+    // ✅ RESET FILES
     deal.tempFiles = [];
-    deal.status = "delivered";
-
     saveDeals(deals);
 
-    delete userStates[sellerId];
+    await ctx.answerCbQuery();
 
     await ctx.reply(
-      `📦 *Delivery Sent Successfully*\n\nYour delivery has been sent to the buyer.\n⏳ Waiting for buyer approval.`,
-      { parse_mode: "Markdown" }
+      `📦 Upload your delivery files\n\nYou can send multiple files.\nWhen done, click "Send All Files".`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Send All Files", `SEND_DELIVERY_${dealId}`)],
+        [Markup.button.callback("🔄 Reset Delivery", `RESET_DELIVERY_${dealId}`)]
+      ])
     );
 
   } catch (err) {
-    console.error("DELIVER ACTION ERROR:", err);
-    await ctx.reply("❌ Failed to deliver files. Try again.");
+    console.error("DELIVER CLICK ERROR:", err);
+    ctx.reply("❌ Failed to start delivery.");
   }
 });
 
@@ -1259,7 +1237,7 @@ if (!sellerId || ctx.from.id !== sellerId)
           `⏳ Delivery Countdown\n\nTime Remaining: ${formatTimeLeft(deliveryMs)}\n\nDeal ID: ${dealId}`,
           Markup.inlineKeyboard([
             [Markup.button.callback("⏳ Request Extension", `EXTEND_${dealId}`)],
-            [Markup.button.callback("📦 Deliver Work", `DELIVER_WORK_${dealId}`)]
+            [Markup.button.callback("📦 Deliver Work", `DELIVER_${dealId}`)]
           ])
         );
 
@@ -1323,7 +1301,7 @@ if (!sellerId || ctx.from.id !== sellerId)
                   {
                     reply_markup: {
                       inline_keyboard: [
-                        [{ text: "📦 Deliver Now", callback_data: `DELIVER_WORK_${dealId}` }]
+                        [{ text: "📦 Deliver Now", callback_data: `DELIVER_${dealId}` }]
                       ]
                     }
                   }
@@ -1352,7 +1330,7 @@ if (!sellerId || ctx.from.id !== sellerId)
                   reply_markup: {
                     inline_keyboard: [
                       [{ text: "⏳ Request Extension", callback_data: `EXTEND_${dealId}` }],
-                      [{ text: "📦 Deliver Work", callback_data: `DELIVER_WORK_${dealId}` }]
+                      [{ text: "📦 Deliver Work", callback_data: `DELIVER_${dealId}` }]
                     ]
                   }
                 }
