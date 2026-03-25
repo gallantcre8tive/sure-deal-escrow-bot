@@ -633,7 +633,7 @@ bot.on('text', async (ctx) => {
         reason,
         requestedAt: new Date().toISOString()
       };
-      saveDeals(deals);if (activeDeal.status === "waiting_payment" && ctx.from.id === activeDeal.buyer)
+      saveDeals(deals);
 
       const buyerId = deal.buyer;
       const sellerUsername = ctx.from.username || ctx.from.first_name;
